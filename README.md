@@ -13,6 +13,8 @@
 
 Aplicación web interactiva para segmentación de imágenes agrícolas y satelitales con 8 métodos, incluyendo PyTorch + SAM (Segment Anything Model).
 
+> ⏬ **Primera carga en Streamlit Cloud:** la app descarga automáticamente el modelo SAM ViT-L (~1.2 GB) desde Google Drive la primera vez que se inicia. Este proceso puede tardar **3 a 8 minutos** dependiendo de la velocidad del servidor. Los **métodos clásicos 1–7 funcionan inmediatamente** sin necesidad del modelo. Una vez descargado, el modelo queda en caché y las cargas siguientes son instantáneas.
+
 ## Características
 
 - **7 métodos clásicos**: Otsu, Canny, Region Growing, Watershed, K-Means, Mean-Shift, GrabCut
@@ -43,16 +45,17 @@ pip install -r requirements.txt
 pip install git+https://github.com/facebookresearch/segment-anything.git
 ```
 
-### 3. Descargar checkpoint SAM ViT-L
+### 3. Checkpoint SAM ViT-L
 
-Descargar el archivo `sam_vit_l_0b3195.pth` (~1.2 GB) desde:
+**En Streamlit Cloud:** se descarga automáticamente al iniciar la app. No se requiere ninguna acción manual.
+
+**En local:** descargar el archivo `sam_vit_l_0b3195.pth` (~1.2 GB) desde:
 https://github.com/facebookresearch/segment-anything#model-checkpoints
 
 Colocar el archivo en la carpeta `models/`:
 ```
-app/
-└── models/
-    └── sam_vit_l_0b3195.pth
+models/
+└── sam_vit_l_0b3195.pth
 ```
 
 > **Nota:** Los métodos clásicos (1-7) funcionan sin necesidad del checkpoint SAM.
