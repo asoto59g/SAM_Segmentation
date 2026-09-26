@@ -1,4 +1,4 @@
-﻿"""
+"""
 app.py
 ------
 App web de segmentación de imágenes agrícolas / satelitales.
@@ -513,8 +513,7 @@ if st.session_state["image_rgb"] is None:
     with col_img:
         st.image(
             "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Colorized_image_of_a_corn_field_in_Iowa.jpg/640px-Colorized_image_of_a_corn_field_in_Iowa.jpg",
-            caption="Ejemplo: imagen agrícola satelital",
-            use_container_width=True,
+            caption="Ejemplo: imagen agrícola satelital", width="stretch",
         )
     st.stop()
 
@@ -557,7 +556,7 @@ with tab_seg:
                     key="image_coords",
                 )
             except ImportError:
-                st.image(display_img, use_container_width=True)
+                st.image(display_img, width="stretch")
                 st.warning(
                     "streamlit-image-coordinates no está instalado.\n"
                     "Instálalo con:\n"
@@ -565,7 +564,7 @@ with tab_seg:
                 )
                 click_value = None
         else:
-            st.image(display_img, use_container_width=True)
+            st.image(display_img, width="stretch")
             click_value = None
 
         # ── Controles de puntos SAM clic ─────────────────────────────
@@ -576,20 +575,17 @@ with tab_seg:
             with btn_col1:
                 add_positive = st.button(
                     "✅ Punto positivo",
-                    help="El próximo clic marcará un punto de objeto (verde)",
-                    use_container_width=True,
+                    help="El próximo clic marcará un punto de objeto (verde)", width="stretch",
                 )
             with btn_col2:
                 add_negative = st.button(
                     "❌ Marcar fondo",
-                    help="El próximo clic marcará un punto de fondo (rojo)",
-                    use_container_width=True,
+                    help="El próximo clic marcará un punto de fondo (rojo)", width="stretch",
                 )
             with btn_col3:
                 clear_points = st.button(
                     "🗑️ Limpiar",
-                    help="Eliminar todos los puntos marcados",
-                    use_container_width=True,
+                    help="Eliminar todos los puntos marcados", width="stretch",
                 )
 
             # Mantener qué tipo de punto se va a agregar
@@ -640,8 +636,7 @@ with tab_seg:
 
         run_btn = st.button(
             run_label,
-            type="primary",
-            use_container_width=True,
+            type="primary", width="stretch",
             disabled=run_disabled,
         )
 
@@ -696,7 +691,7 @@ with tab_seg:
         result_rgb: np.ndarray | None = st.session_state["result_rgb"]
 
         if result_rgb is not None:
-            st.image(result_rgb, use_container_width=True)
+            st.image(result_rgb, width="stretch")
 
             # Info extra para SAM
             if st.session_state["sam_masks"] is not None:
@@ -713,8 +708,7 @@ with tab_seg:
                     label="⬇️ PNG",
                     data=png_bytes,
                     file_name=_build_filename("png"),
-                    mime="image/png",
-                    use_container_width=True,
+                    mime="image/png", width="stretch",
                 )
 
             with dl_col2:
@@ -725,8 +719,7 @@ with tab_seg:
                     label=btn_label,
                     data=tiff_bytes,
                     file_name=_build_filename("tif"),
-                    mime="image/tiff",
-                    use_container_width=True,
+                    mime="image/tiff", width="stretch",
                     help=(
                         "Conserva la georreferenciación original."
                         if has_geo
@@ -871,7 +864,7 @@ with tab_compare:
             cell_height=520,
         )
 
-        st.image(grid, use_container_width=True, caption="Grid comparativo")
+        st.image(grid, width="stretch", caption="Grid comparativo")
 
         # Descarga del grid
         grid_bytes = image_to_bytes(grid, fmt="png")
