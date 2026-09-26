@@ -83,7 +83,7 @@ DEFAULT_SAM_CHECKPOINT = str(_SAM_CHECKPOINT_DIR / _SAM_FILENAME)
 # ---------------------------------------------------------------------------
 
 @st.cache_resource(show_spinner=False)
-def _ensure_sam_checkpoint() -> str:
+def _ensure_sam_checkpoint() -> tuple[str, str | None]:
     """
     Descarga el checkpoint SAM ViT-L desde Google Drive si no existe en disco.
     Usa /tmp/sam_models/ en Streamlit Cloud (donde /mount/src/ es read-only).
@@ -91,24 +91,39 @@ def _ensure_sam_checkpoint() -> str:
 
     Returns
     -------
-    str
-        Ruta local al checkpoint .pth (puede no existir si la descarga falló).
+    path : str
+        Ruta local al checkpoint .pth.
+    error : str | None
+        Mensaje de error si la descarga falló, None si fue exitosa.
     """
+    import traceback
+
     checkpoint_path = Path(DEFAULT_SAM_CHECKPOINT)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
     if checkpoint_path.exists() and checkpoint_path.stat().st_size > 100_000_000:
-        # Archivo ya descargado y tiene tamaño razonable (>100 MB)
-        return str(checkpoint_path)
+        return str(checkpoint_path), None
 
     try:
         import gdown
         url = f"https://drive.google.com/uc?id={_SAM_GDRIVE_FILE_ID}"
-        gdown.download(url, str(checkpoint_path), quiet=False, fuzzy=True)
-    except Exception:
-        pass  # SAMHandler mostrará el error adecuado en la UI
-
-    return str(checkpoint_path)
+        result = gdown.download(url, str(checkpoint_path), quiet=False, fuzzy=True)
+        if result is None:
+            # gdown devuelve None cuando el archivo no es accesible públicamente
+            return str(checkpoint_path), (
+                "gdown retornó None — el archivo de Google Drive puede no ser público.\n"
+                f"File ID: {_SAM_GDRIVE_FILE_ID}\n"
+                "Solución: en Google Drive → Compartir → 'Cualquier persona con el enlace'."
+            )
+        if not checkpoint_path.exists() or checkpoint_path.stat().st_size < 100_000_000:
+            return str(checkpoint_path), (
+                f"Descarga incompleta. Tamaño obtenido: "
+                f"{checkpoint_path.stat().st_size // 1024 // 1024 if checkpoint_path.exists() else 0} MB "
+                f"(se esperan ~1200 MB)."
+            )
+        return str(checkpoint_path), None
+    except Exception as exc:
+        return str(checkpoint_path), f"Error en descarga: {traceback.format_exc()}"
 
 # Etiquetas mostradas en el selector (orden → nombre interno)
 METHOD_LABELS: dict[str, str] = {
@@ -235,7 +250,7 @@ _init_state()
 # ---------------------------------------------------------------------------
 # Iniciar descarga del checkpoint SAM en background (una sola vez por servidor)
 # ---------------------------------------------------------------------------
-_resolved_sam_path = _ensure_sam_checkpoint()
+_resolved_sam_path, _sam_download_error = _ensure_sam_checkpoint()
 
 # ---------------------------------------------------------------------------
 # Cache de recursos pesados
@@ -426,16 +441,13 @@ with st.sidebar:
             else:
                 st.markdown('<p class="sam-status-err">❌ Checkpoint no encontrado</p>',
                             unsafe_allow_html=True)
-                st.caption(
-                    f"Guardando en: `{sam_path}`\n\n"
-                    "Si la descarga falló, verifica que el archivo de Google Drive "
-                    "sea público (cualquiera con el enlace)."
-                )
+                st.caption(f"Ruta destino: `{sam_path}`")
+                if _sam_download_error:
+                    with st.expander("🔍 Ver error de descarga"):
+                        st.code(_sam_download_error, language="text")
                 if st.button("🔄 Reintentar descarga", key="retry_download2"):
                     _ensure_sam_checkpoint.clear()
                     st.rerun()
-
-        st.caption(f"Dispositivo: **{info['device'].upper()}**")
 
     st.markdown("---")
     st.caption("ABC Geomática Agrícola SRL · 2026")
