@@ -1,32 +1,32 @@
 ﻿# =============================================
 # Dependencias - App Segmentación Imágenes
+# Compatibles con Streamlit Cloud (Linux)
 # =============================================
 
 # Web app
-streamlit==1.42.0
+streamlit>=1.42.0
 
-# Deep Learning - PyTorch CPU
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.6.0+cpu
-torchvision==0.21.0+cpu
+# Deep Learning - PyTorch (Streamlit Cloud instala la versión CPU por defecto)
+torch>=2.0.0
+torchvision>=0.15.0
 
-# Segment Anything Model (SAM) - instalar por separado:
-# pip install git+https://github.com/facebookresearch/segment-anything.git
+# Segment Anything Model (SAM) - Meta AI
+git+https://github.com/facebookresearch/segment-anything.git
 
-# Computer Vision
-opencv-python==4.11.0.86
-numpy==1.26.4
+# Computer Vision (headless: sin dependencias de GUI para Linux/Cloud)
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
 
 # Machine Learning
-scikit-learn==1.6.1
-scikit-image==0.25.1
+scikit-learn>=1.3.0
+scikit-image>=0.21.0
 
 # Visualización
-matplotlib==3.10.0
-Pillow==11.1.0
+matplotlib>=3.7.0
+Pillow>=10.0.0
 
 # GIS / GeoTIFF
-rasterio==1.4.3
+rasterio>=1.3.0
 
 # Streamlit interactivo
-streamlit-image-coordinates==0.4.2
+streamlit-image-coordinates>=0.4.1
