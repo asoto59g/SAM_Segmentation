@@ -1,5 +1,16 @@
 ﻿# App de Segmentación de Imágenes Agrícolas
 
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.56-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![SAM](https://img.shields.io/badge/SAM-ViT--L-0064e0?style=flat-square&logo=meta&logoColor=white)](https://github.com/facebookresearch/segment-anything)
+[![OpenCV](https://img.shields.io/badge/OpenCV-4.x-5C3EE8?style=flat-square&logo=opencv&logoColor=white)](https://opencv.org/)
+[![License](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
+[![CPU Ready](https://img.shields.io/badge/Hardware-CPU%20%7C%20CUDA-f59e0b?style=flat-square&logo=nvidia&logoColor=white)](https://pytorch.org/)
+[![GeoTIFF](https://img.shields.io/badge/Format-GeoTIFF%20%7C%20PNG-6366f1?style=flat-square&logo=qgis&logoColor=white)](https://rasterio.readthedocs.io/)
+[![Rasterio](https://img.shields.io/badge/Rasterio-1.5-16a34a?style=flat-square)](https://rasterio.readthedocs.io/)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000?style=flat-square)](https://github.com/psf/black)
+
 Aplicación web interactiva para segmentación de imágenes agrícolas y satelitales con 8 métodos, incluyendo PyTorch + SAM (Segment Anything Model).
 
 ## Características
