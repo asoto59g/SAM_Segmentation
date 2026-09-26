@@ -54,11 +54,20 @@ from utils.visualization import (
 APP_TITLE = "🌾 Segmentación de Imágenes Agrícolas"
 APP_ICON = "🌿"
 
-# Ruta por defecto del checkpoint SAM
-DEFAULT_SAM_CHECKPOINT = str(_APP_DIR / "models" / "sam_vit_l_0b3195.pth")
-
 # Google Drive file ID del checkpoint SAM ViT-L
 _SAM_GDRIVE_FILE_ID = "1Uj9-Shntka1a3k4e49ZFbHHwDV_dC2_d"
+_SAM_FILENAME = "sam_vit_l_0b3195.pth"
+
+# Ruta de escritura del checkpoint:
+# - /tmp/ está disponible en Streamlit Cloud (lectura/escritura)
+# - Si existe la carpeta models/ local (uso en desarrollo), se usa esa
+_LOCAL_MODELS_DIR = _APP_DIR / "models"
+if _LOCAL_MODELS_DIR.exists() and os.access(str(_LOCAL_MODELS_DIR), os.W_OK):
+    _SAM_CHECKPOINT_DIR = _LOCAL_MODELS_DIR
+else:
+    _SAM_CHECKPOINT_DIR = Path("/tmp/sam_models")
+
+DEFAULT_SAM_CHECKPOINT = str(_SAM_CHECKPOINT_DIR / _SAM_FILENAME)
 
 # ---------------------------------------------------------------------------
 # Descarga automática del checkpoint SAM desde Google Drive
@@ -68,29 +77,29 @@ _SAM_GDRIVE_FILE_ID = "1Uj9-Shntka1a3k4e49ZFbHHwDV_dC2_d"
 def _ensure_sam_checkpoint() -> str:
     """
     Descarga el checkpoint SAM ViT-L desde Google Drive si no existe en disco.
-    Se ejecuta una sola vez por sesión del servidor (cache_resource).
+    Usa /tmp/sam_models/ en Streamlit Cloud (donde /mount/src/ es read-only).
+    Se ejecuta una sola vez por sesión del servidor gracias a cache_resource.
 
     Returns
     -------
     str
-        Ruta local al checkpoint .pth.
+        Ruta local al checkpoint .pth (puede no existir si la descarga falló).
     """
     checkpoint_path = Path(DEFAULT_SAM_CHECKPOINT)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if checkpoint_path.exists():
+    if checkpoint_path.exists() and checkpoint_path.stat().st_size > 100_000_000:
+        # Archivo ya descargado y tiene tamaño razonable (>100 MB)
         return str(checkpoint_path)
 
     try:
         import gdown
         url = f"https://drive.google.com/uc?id={_SAM_GDRIVE_FILE_ID}"
         gdown.download(url, str(checkpoint_path), quiet=False, fuzzy=True)
-        if checkpoint_path.exists():
-            return str(checkpoint_path)
-        else:
-            return str(checkpoint_path)   # SAMHandler manejará el error
     except Exception:
-        return str(checkpoint_path)       # SAMHandler manejará el error
+        pass  # SAMHandler mostrará el error adecuado en la UI
+
+    return str(checkpoint_path)
 
 # Etiquetas mostradas en el selector (orden → nombre interno)
 METHOD_LABELS: dict[str, str] = {
@@ -391,20 +400,31 @@ with st.sidebar:
                 language="bash",
             )
         else:
-            # Checkpoint no encontrado: puede estar descargándose
-            checkpoint_exists = Path(sam_path).exists()
-            if not checkpoint_exists:
-                st.markdown('<p class="sam-status-warn">⏬ Descargando modelo desde Google Drive (~1.2 GB)…</p>',
+            # Checkpoint no encontrado o descarga incompleta
+            checkpoint_file = Path(sam_path)
+            file_exists = checkpoint_file.exists()
+            file_size_ok = file_exists and checkpoint_file.stat().st_size > 100_000_000
+
+            if file_exists and not file_size_ok:
+                st.markdown('<p class="sam-status-err">⚠️ Descarga incompleta o corrompida</p>',
                             unsafe_allow_html=True)
-                st.caption("La descarga ocurre una sola vez. Recarga la página en unos minutos.")
+                st.caption(f"Archivo en: `{sam_path}`")
+                if st.button("🔄 Reintentar descarga", key="retry_download"):
+                    checkpoint_file.unlink(missing_ok=True)
+                    get_sam_handler.clear()
+                    _ensure_sam_checkpoint.clear()
+                    st.rerun()
             else:
                 st.markdown('<p class="sam-status-err">❌ Checkpoint no encontrado</p>',
                             unsafe_allow_html=True)
                 st.caption(
-                    "Descarga `sam_vit_l_0b3195.pth` desde:\n"
-                    "https://github.com/facebookresearch/segment-anything#model-checkpoints\n"
-                    "y colócalo en la carpeta `models/`."
+                    f"Guardando en: `{sam_path}`\n\n"
+                    "Si la descarga falló, verifica que el archivo de Google Drive "
+                    "sea público (cualquiera con el enlace)."
                 )
+                if st.button("🔄 Reintentar descarga", key="retry_download2"):
+                    _ensure_sam_checkpoint.clear()
+                    st.rerun()
 
         st.caption(f"Dispositivo: **{info['device'].upper()}**")
 
