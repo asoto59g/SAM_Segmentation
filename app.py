@@ -58,11 +58,20 @@ APP_ICON = "🌿"
 _SAM_GDRIVE_FILE_ID = "1Uj9-Shntka1a3k4e49ZFbHHwDV_dC2_d"
 _SAM_FILENAME = "sam_vit_l_0b3195.pth"
 
-# Ruta de escritura del checkpoint:
-# - /tmp/ está disponible en Streamlit Cloud (lectura/escritura)
-# - Si existe la carpeta models/ local (uso en desarrollo), se usa esa
+# Detectar si la carpeta models/ admite escritura real (falla en /mount/src/ de Streamlit Cloud)
+def _dir_is_writable(path: Path) -> bool:
+    """Prueba escritura real creando y borrando un archivo temporal."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        test = path / ".write_test"
+        test.write_text("x")
+        test.unlink()
+        return True
+    except Exception:
+        return False
+
 _LOCAL_MODELS_DIR = _APP_DIR / "models"
-if _LOCAL_MODELS_DIR.exists() and os.access(str(_LOCAL_MODELS_DIR), os.W_OK):
+if _dir_is_writable(_LOCAL_MODELS_DIR):
     _SAM_CHECKPOINT_DIR = _LOCAL_MODELS_DIR
 else:
     _SAM_CHECKPOINT_DIR = Path("/tmp/sam_models")
