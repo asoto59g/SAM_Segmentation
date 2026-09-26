@@ -190,6 +190,7 @@ def _init_state() -> None:
         "result_method":   None,   # nombre del último método
         "sam_masks":       None,   # máscaras SAM (auto o clic)
         "uploaded_key":    None,   # identidad del archivo ya cargado
+        "last_click":      None,   # último clic consumido: (key, x, y)
         "click_points":    [],     # list[(x,y)]
         "click_labels":    [],     # list[int]  1=pos, 0=neg
         "compare_results": {},     # {label: np.ndarray}
@@ -261,6 +262,7 @@ with st.sidebar:
             st.session_state["sam_masks"]   = None
             st.session_state["click_points"] = []
             st.session_state["click_labels"] = []
+            st.session_state["last_click"] = None
             st.session_state["compare_results"] = {}
         except Exception as e:
             st.error(f"Error al cargar la imagen: {e}")
@@ -486,6 +488,10 @@ with tab_seg:
     image_rgb: np.ndarray = st.session_state["image_rgb"]
     metadata: dict        = st.session_state["metadata"]
 
+    # Key propia por imagen: evita que el componente de clics reutilice el
+    # valor capturado sobre la imagen anterior.
+    coords_key = f"image_coords_{st.session_state['uploaded_key']}"
+
     # ── Layout: original | resultado ────────────────────────────────────
     col_orig, col_result = st.columns(2, gap="medium")
 
@@ -510,7 +516,7 @@ with tab_seg:
                 from streamlit_image_coordinates import streamlit_image_coordinates
                 click_value = streamlit_image_coordinates(
                     Image.fromarray(display_img),
-                    key="image_coords",
+                    key=coords_key,
                 )
             except ImportError:
                 st.image(display_img, width="stretch")
@@ -556,16 +562,17 @@ with tab_seg:
             if clear_points:
                 st.session_state["click_points"] = []
                 st.session_state["click_labels"] = []
+                st.session_state["last_click"]   = None
                 st.session_state["sam_masks"]    = None
                 st.session_state["result_rgb"]   = None
                 st.rerun()
 
-            # Capturar coordenadas del clic
+            # Capturar coordenadas del clic. El componente vuelve a devolver su
+            # último valor en cada rerun, así que se consume una sola vez.
             if click_value is not None:
                 cx, cy = int(click_value["x"]), int(click_value["y"])
-                # Evitar duplicados exactos
-                existing = st.session_state["click_points"]
-                if not existing or existing[-1] != (cx, cy):
+                if st.session_state["last_click"] != (coords_key, cx, cy):
+                    st.session_state["last_click"] = (coords_key, cx, cy)
                     st.session_state["click_points"].append((cx, cy))
                     st.session_state["click_labels"].append(
                         st.session_state["next_label"]
