@@ -365,6 +365,18 @@ with st.sidebar:
     st.caption("ABC Geomática Agrícola SRL · 2026")
 
 # ---------------------------------------------------------------------------
+# Helper — nombre de archivo para descargas
+# ---------------------------------------------------------------------------
+
+def _build_filename(ext: str) -> str:
+    """Construye el nombre de archivo para la descarga."""
+    fname = st.session_state.get("filename") or "imagen"
+    stem  = Path(fname).stem
+    mkey  = st.session_state.get("result_method") or "resultado"
+    return f"{stem}_{mkey}.{ext}"
+
+
+# ---------------------------------------------------------------------------
 # ╔══════════════════════════════════════╗
 # ║         Á R E A   P R I N C I P A L ║
 # ╚══════════════════════════════════════╝
@@ -782,13 +794,4 @@ with tab_compare:
         )
 
 
-# ===========================================================================
-#  Helpers
-# ===========================================================================
 
-def _build_filename(ext: str) -> str:
-    """Construye el nombre de archivo para la descarga."""
-    fname = st.session_state.get("filename") or "imagen"
-    stem  = Path(fname).stem
-    mkey  = st.session_state.get("result_method") or "resultado"
-    return f"{stem}_{mkey}.{ext}"
