@@ -82,48 +82,51 @@ DEFAULT_SAM_CHECKPOINT = str(_SAM_CHECKPOINT_DIR / _SAM_FILENAME)
 # Descarga automática del checkpoint SAM desde Google Drive
 # ---------------------------------------------------------------------------
 
-@st.cache_resource(show_spinner=False)
-def _ensure_sam_checkpoint() -> tuple[str, str | None]:
+def _ensure_sam_checkpoint():
     """
     Descarga el checkpoint SAM ViT-L desde Google Drive si no existe en disco.
     Usa /tmp/sam_models/ en Streamlit Cloud (donde /mount/src/ es read-only).
-    Se ejecuta una sola vez por sesión del servidor gracias a cache_resource.
-
-    Returns
-    -------
-    path : str
-        Ruta local al checkpoint .pth.
-    error : str | None
-        Mensaje de error si la descarga falló, None si fue exitosa.
+    Guarda el error en st.session_state["sam_download_error"] si falla.
     """
     import traceback
 
     checkpoint_path = Path(DEFAULT_SAM_CHECKPOINT)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Ya descargado correctamente
     if checkpoint_path.exists() and checkpoint_path.stat().st_size > 100_000_000:
-        return str(checkpoint_path), None
+        st.session_state["sam_download_error"] = None
+        return str(checkpoint_path)
+
+    # Marcar que estamos descargando
+    st.session_state["sam_download_error"] = None
 
     try:
         import gdown
         url = f"https://drive.google.com/uc?id={_SAM_GDRIVE_FILE_ID}"
         result = gdown.download(url, str(checkpoint_path), quiet=False, fuzzy=True)
+
         if result is None:
-            # gdown devuelve None cuando el archivo no es accesible públicamente
-            return str(checkpoint_path), (
-                "gdown retornó None — el archivo de Google Drive puede no ser público.\n"
-                f"File ID: {_SAM_GDRIVE_FILE_ID}\n"
-                "Solución: en Google Drive → Compartir → 'Cualquier persona con el enlace'."
+            st.session_state["sam_download_error"] = (
+                "gdown retorno None.\n"
+                "El archivo de Google Drive NO es publico.\n"
+                "Solucion: Drive -> Compartir -> "
+                "'Cualquier persona con el enlace' -> Lector.\n"
+                f"File ID: {_SAM_GDRIVE_FILE_ID}"
             )
-        if not checkpoint_path.exists() or checkpoint_path.stat().st_size < 100_000_000:
-            return str(checkpoint_path), (
-                f"Descarga incompleta. Tamaño obtenido: "
-                f"{checkpoint_path.stat().st_size // 1024 // 1024 if checkpoint_path.exists() else 0} MB "
-                f"(se esperan ~1200 MB)."
+        elif checkpoint_path.exists() and checkpoint_path.stat().st_size < 100_000_000:
+            mb = checkpoint_path.stat().st_size // 1024 // 1024
+            st.session_state["sam_download_error"] = (
+                f"Descarga incompleta: {mb} MB obtenidos (se esperan ~1200 MB).\n"
+                "Puede ser un problema de permisos o timeout."
             )
-        return str(checkpoint_path), None
-    except Exception as exc:
-        return str(checkpoint_path), f"Error en descarga: {traceback.format_exc()}"
+
+    except Exception:
+        st.session_state["sam_download_error"] = (
+            f"Error en descarga:\n{traceback.format_exc()}"
+        )
+
+    return str(checkpoint_path)
 
 # Etiquetas mostradas en el selector (orden → nombre interno)
 METHOD_LABELS: dict[str, str] = {
@@ -240,6 +243,7 @@ def _init_state() -> None:
         "click_points":    [],     # list[(x,y)]
         "click_labels":    [],     # list[int]  1=pos, 0=neg
         "compare_results": {},     # {label: np.ndarray}
+        "sam_download_error": None, # error message from last download attempt
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -250,7 +254,7 @@ _init_state()
 # ---------------------------------------------------------------------------
 # Iniciar descarga del checkpoint SAM en background (una sola vez por servidor)
 # ---------------------------------------------------------------------------
-_resolved_sam_path, _sam_download_error = _ensure_sam_checkpoint()
+_resolved_sam_path = _ensure_sam_checkpoint()
 
 # ---------------------------------------------------------------------------
 # Cache de recursos pesados
@@ -430,23 +434,25 @@ with st.sidebar:
             file_size_ok = file_exists and checkpoint_file.stat().st_size > 100_000_000
 
             if file_exists and not file_size_ok:
-                st.markdown('<p class="sam-status-err">⚠️ Descarga incompleta o corrompida</p>',
+                st.markdown('<p class="sam-status-err">⚠️ Descarga incompleta</p>',
                             unsafe_allow_html=True)
                 st.caption(f"Archivo en: `{sam_path}`")
                 if st.button("🔄 Reintentar descarga", key="retry_download"):
                     checkpoint_file.unlink(missing_ok=True)
                     get_sam_handler.clear()
-                    _ensure_sam_checkpoint.clear()
                     st.rerun()
             else:
                 st.markdown('<p class="sam-status-err">❌ Checkpoint no encontrado</p>',
                             unsafe_allow_html=True)
                 st.caption(f"Ruta destino: `{sam_path}`")
-                if _sam_download_error:
+                # Mostrar error de descarga si existe
+                dl_err = st.session_state.get("sam_download_error")
+                if dl_err:
                     with st.expander("🔍 Ver error de descarga"):
-                        st.code(_sam_download_error, language="text")
+                        st.code(dl_err, language="text")
                 if st.button("🔄 Reintentar descarga", key="retry_download2"):
-                    _ensure_sam_checkpoint.clear()
+                    st.session_state["sam_download_error"] = None
+                    _ensure_sam_checkpoint()
                     st.rerun()
 
     st.markdown("---")
