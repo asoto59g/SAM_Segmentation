@@ -57,6 +57,41 @@ APP_ICON = "🌿"
 # Ruta por defecto del checkpoint SAM
 DEFAULT_SAM_CHECKPOINT = str(_APP_DIR / "models" / "sam_vit_l_0b3195.pth")
 
+# Google Drive file ID del checkpoint SAM ViT-L
+_SAM_GDRIVE_FILE_ID = "1Uj9-Shntka1a3k4e49ZFbHHwDV_dC2_d"
+
+# ---------------------------------------------------------------------------
+# Descarga automática del checkpoint SAM desde Google Drive
+# ---------------------------------------------------------------------------
+
+@st.cache_resource(show_spinner=False)
+def _ensure_sam_checkpoint() -> str:
+    """
+    Descarga el checkpoint SAM ViT-L desde Google Drive si no existe en disco.
+    Se ejecuta una sola vez por sesión del servidor (cache_resource).
+
+    Returns
+    -------
+    str
+        Ruta local al checkpoint .pth.
+    """
+    checkpoint_path = Path(DEFAULT_SAM_CHECKPOINT)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if checkpoint_path.exists():
+        return str(checkpoint_path)
+
+    try:
+        import gdown
+        url = f"https://drive.google.com/uc?id={_SAM_GDRIVE_FILE_ID}"
+        gdown.download(url, str(checkpoint_path), quiet=False, fuzzy=True)
+        if checkpoint_path.exists():
+            return str(checkpoint_path)
+        else:
+            return str(checkpoint_path)   # SAMHandler manejará el error
+    except Exception:
+        return str(checkpoint_path)       # SAMHandler manejará el error
+
 # Etiquetas mostradas en el selector (orden → nombre interno)
 METHOD_LABELS: dict[str, str] = {
     "1 · Otsu (Umbralización)":       "otsu",
@@ -178,6 +213,11 @@ def _init_state() -> None:
             st.session_state[key] = val
 
 _init_state()
+
+# ---------------------------------------------------------------------------
+# Iniciar descarga del checkpoint SAM en background (una sola vez por servidor)
+# ---------------------------------------------------------------------------
+_resolved_sam_path = _ensure_sam_checkpoint()
 
 # ---------------------------------------------------------------------------
 # Cache de recursos pesados
@@ -329,7 +369,7 @@ with st.sidebar:
 
         sam_path = st.text_input(
             "Ruta checkpoint .pth",
-            value=DEFAULT_SAM_CHECKPOINT,
+            value=_resolved_sam_path,
             help="Ruta al archivo sam_vit_l_0b3195.pth",
             label_visibility="visible",
         )
@@ -351,13 +391,20 @@ with st.sidebar:
                 language="bash",
             )
         else:
-            st.markdown('<p class="sam-status-err">❌ Checkpoint no encontrado</p>',
-                        unsafe_allow_html=True)
-            st.caption(
-                "Descarga `sam_vit_l_0b3195.pth` desde:\n"
-                "https://github.com/facebookresearch/segment-anything#model-checkpoints\n"
-                "y colócalo en la carpeta `models/`."
-            )
+            # Checkpoint no encontrado: puede estar descargándose
+            checkpoint_exists = Path(sam_path).exists()
+            if not checkpoint_exists:
+                st.markdown('<p class="sam-status-warn">⏬ Descargando modelo desde Google Drive (~1.2 GB)…</p>',
+                            unsafe_allow_html=True)
+                st.caption("La descarga ocurre una sola vez. Recarga la página en unos minutos.")
+            else:
+                st.markdown('<p class="sam-status-err">❌ Checkpoint no encontrado</p>',
+                            unsafe_allow_html=True)
+                st.caption(
+                    "Descarga `sam_vit_l_0b3195.pth` desde:\n"
+                    "https://github.com/facebookresearch/segment-anything#model-checkpoints\n"
+                    "y colócalo en la carpeta `models/`."
+                )
 
         st.caption(f"Dispositivo: **{info['device'].upper()}**")
 
@@ -557,7 +604,7 @@ with tab_seg:
                 try:
                     if method_key in SAM_METHODS:
                         # Obtener handler (puede haberse creado con path diferente)
-                        _sam_path = st.session_state.get("sam_path_used", DEFAULT_SAM_CHECKPOINT)
+                        _sam_path = st.session_state.get("sam_path_used", _resolved_sam_path)
                         handler = get_sam_handler(_sam_path)
 
                         if method_key == "sam_auto":
@@ -723,7 +770,7 @@ with tab_compare:
                 return label, image_rgb_c.copy()
 
             if mkey == "sam_auto":
-                _sam_path = st.session_state.get("sam_path_used", DEFAULT_SAM_CHECKPOINT)
+                _sam_path = st.session_state.get("sam_path_used", _resolved_sam_path)
                 handler_c = get_sam_handler(_sam_path)
                 masks_c, err_c = handler_c.auto_segment(
                     image_rgb_c,

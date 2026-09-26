@@ -30,3 +30,6 @@ rasterio>=1.3.0
 
 # Streamlit interactivo
 streamlit-image-coordinates>=0.4.1
+
+# Descarga de modelos desde Google Drive
+gdown>=5.1.0
