@@ -191,6 +191,7 @@ def _init_state() -> None:
         "sam_masks":       None,   # máscaras SAM (auto o clic)
         "uploaded_key":    None,   # identidad del archivo ya cargado
         "last_click":      None,   # último clic consumido: (key, x, y)
+        "coords_gen":      0,      # generación del componente de clics
         "click_points":    [],     # list[(x,y)]
         "click_labels":    [],     # list[int]  1=pos, 0=neg
         "compare_results": {},     # {label: np.ndarray}
@@ -490,7 +491,10 @@ with tab_seg:
 
     # Key propia por imagen: evita que el componente de clics reutilice el
     # valor capturado sobre la imagen anterior.
-    coords_key = f"image_coords_{st.session_state['uploaded_key']}"
+    coords_key = (
+        f"image_coords_{st.session_state['uploaded_key']}"
+        f"_{st.session_state['coords_gen']}"
+    )
 
     # ── Layout: original | resultado ────────────────────────────────────
     col_orig, col_result = st.columns(2, gap="medium")
@@ -563,6 +567,8 @@ with tab_seg:
                 st.session_state["click_points"] = []
                 st.session_state["click_labels"] = []
                 st.session_state["last_click"]   = None
+                # Remontar el componente para que no reenvíe el último clic
+                st.session_state["coords_gen"] += 1
                 st.session_state["sam_masks"]    = None
                 st.session_state["result_rgb"]   = None
                 st.rerun()
