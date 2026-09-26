@@ -189,6 +189,7 @@ def _init_state() -> None:
         "result_rgb":      None,   # último resultado
         "result_method":   None,   # nombre del último método
         "sam_masks":       None,   # máscaras SAM (auto o clic)
+        "uploaded_key":    None,   # identidad del archivo ya cargado
         "click_points":    [],     # list[(x,y)]
         "click_labels":    [],     # list[int]  1=pos, 0=neg
         "compare_results": {},     # {label: np.ndarray}
@@ -241,10 +242,18 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
-    if uploaded is not None:
+    # Recargar solo cuando cambia el archivo: en cada rerun (p.ej. al hacer clic
+    # sobre la imagen) el uploader sigue devolviendo el mismo archivo.
+    uploaded_key = (
+        getattr(uploaded, "file_id", None) or f"{uploaded.name}:{uploaded.size}"
+        if uploaded is not None else None
+    )
+
+    if uploaded is not None and uploaded_key != st.session_state["uploaded_key"]:
         file_bytes = uploaded.read()
         try:
             image_rgb, metadata = image_from_bytes(file_bytes, uploaded.name)
+            st.session_state["uploaded_key"] = uploaded_key
             st.session_state["image_rgb"]   = image_rgb
             st.session_state["metadata"]    = metadata
             st.session_state["filename"]    = uploaded.name
