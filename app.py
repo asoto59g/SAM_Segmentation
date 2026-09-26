@@ -252,9 +252,22 @@ def _init_state() -> None:
 _init_state()
 
 # ---------------------------------------------------------------------------
-# Iniciar descarga del checkpoint SAM en background (una sola vez por servidor)
+# Iniciar descarga del checkpoint SAM en background (no bloquea la UI)
 # ---------------------------------------------------------------------------
-_resolved_sam_path = _ensure_sam_checkpoint()
+import threading as _threading
+
+def _background_download():
+    """Descarga SAM en un hilo separado para no bloquear el arranque de la UI."""
+    _ensure_sam_checkpoint()
+
+# Lanzar solo una vez usando un flag en session_state
+if "sam_download_started" not in st.session_state:
+    st.session_state["sam_download_started"] = True
+    _t = _threading.Thread(target=_background_download, daemon=True)
+    _t.start()
+
+# Ruta donde quedará el modelo (puede no existir todavía si sigue descargando)
+_resolved_sam_path = DEFAULT_SAM_CHECKPOINT
 
 # ---------------------------------------------------------------------------
 # Cache de recursos pesados
@@ -431,27 +444,41 @@ with st.sidebar:
             # Checkpoint no encontrado o descarga incompleta
             checkpoint_file = Path(sam_path)
             file_exists = checkpoint_file.exists()
-            file_size_ok = file_exists and checkpoint_file.stat().st_size > 100_000_000
+            file_size_mb = checkpoint_file.stat().st_size // 1024 // 1024 if file_exists else 0
+            file_size_ok = file_size_mb > 100
 
             if file_exists and not file_size_ok:
-                st.markdown('<p class="sam-status-err">⚠️ Descarga incompleta</p>',
-                            unsafe_allow_html=True)
-                st.caption(f"Archivo en: `{sam_path}`")
-                if st.button("🔄 Reintentar descarga", key="retry_download"):
+                # Archivo parcial — descarga en progreso
+                st.markdown(
+                    f'<p class="sam-status-warn">⏬ Descargando… {file_size_mb} MB / ~1200 MB</p>',
+                    unsafe_allow_html=True,
+                )
+                st.caption("Recarga la página en unos minutos para ver el progreso.")
+                if st.button("🔄 Forzar reintento", key="retry_download"):
                     checkpoint_file.unlink(missing_ok=True)
                     get_sam_handler.clear()
+                    st.session_state["sam_download_started"] = False
                     st.rerun()
             else:
-                st.markdown('<p class="sam-status-err">❌ Checkpoint no encontrado</p>',
-                            unsafe_allow_html=True)
-                st.caption(f"Ruta destino: `{sam_path}`")
-                # Mostrar error de descarga si existe
+                # No existe aún — descarga iniciada en background
                 dl_err = st.session_state.get("sam_download_error")
                 if dl_err:
-                    with st.expander("🔍 Ver error de descarga"):
+                    st.markdown('<p class="sam-status-err">❌ Error en descarga</p>',
+                                unsafe_allow_html=True)
+                    with st.expander("🔍 Ver error"):
                         st.code(dl_err, language="text")
+                else:
+                    st.markdown(
+                        '<p class="sam-status-warn">⏬ Descarga iniciada en background (~1.2 GB)</p>',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(
+                        f"Guardando en: `{sam_path}`\n\n"
+                        "Puede tardar 3-8 min. Recarga la página para ver el progreso."
+                    )
                 if st.button("🔄 Reintentar descarga", key="retry_download2"):
                     st.session_state["sam_download_error"] = None
+                    st.session_state["sam_download_started"] = False
                     _ensure_sam_checkpoint()
                     st.rerun()
 
