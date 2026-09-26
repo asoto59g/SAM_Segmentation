@@ -1,14 +1,18 @@
-﻿# =============================================
+# =============================================
 # Dependencias - App Segmentación Imágenes
 # Compatibles con Streamlit Cloud (Linux)
 # =============================================
 
+# PyTorch CPU: el wheel de PyPI para Linux trae CUDA (~2.5 GB con las libs
+# nvidia-*) y excede el límite de recursos de Streamlit Cloud.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # Web app
 streamlit>=1.42.0
 
-# Deep Learning - PyTorch (Streamlit Cloud instala la versión CPU por defecto)
-torch>=2.0.0
-torchvision>=0.15.0
+# Deep Learning - PyTorch (build CPU explícito)
+torch==2.8.0+cpu
+torchvision==0.23.0+cpu
 
 # Segment Anything Model (SAM) - Meta AI
 git+https://github.com/facebookresearch/segment-anything.git
@@ -30,6 +34,3 @@ rasterio>=1.3.0
 
 # Streamlit interactivo
 streamlit-image-coordinates>=0.4.1
-
-# Descarga de modelos desde Google Drive
-gdown>=5.1.0

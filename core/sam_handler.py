@@ -1,7 +1,9 @@
 ﻿"""
 core/sam_handler.py
 --------------------
-Integración de Segment Anything Model (SAM) ViT-L.
+Integración de Segment Anything Model (SAM).
+
+La variante (vit_b / vit_l / vit_h) se deduce del nombre del checkpoint.
 
 Modos disponibles
 -----------------
@@ -16,7 +18,7 @@ Dependencias
     pip install torch torchvision
     pip install git+https://github.com/facebookresearch/segment-anything.git
 
-Checkpoint recomendado: sam_vit_l_0b3195.pth (~1.2 GB)
+Checkpoint por defecto en la nube: sam_vit_b_01ec64.pth (~375 MB)
 https://github.com/facebookresearch/segment-anything#model-checkpoints
 """
 
@@ -27,11 +29,11 @@ from typing import Optional
 
 import numpy as np
 
+from core.checkpoint import DEFAULT_MODEL_TYPE, model_type_from_path
+
 # ---------------------------------------------------------------------------
 # Constantes
 # ---------------------------------------------------------------------------
-
-MODEL_TYPE = "vit_l"
 
 # Parámetros optimizados para imágenes agrícolas / satelitales:
 # - Menos puntos por lado → regiones más grandes (campos, parcelas)
@@ -51,7 +53,7 @@ _AUTO_PARAMS = {
 
 class SAMHandler:
     """
-    Gestiona la carga y la inferencia de SAM ViT-L.
+    Gestiona la carga y la inferencia de SAM.
 
     Attributes
     ----------
@@ -70,6 +72,10 @@ class SAMHandler:
             Path(checkpoint_path) if checkpoint_path else None
         )
         self._model = None
+        self.model_type: str = (
+            model_type_from_path(self.checkpoint_path)
+            if self.checkpoint_path else DEFAULT_MODEL_TYPE
+        )
         self._device: str = self._detect_device()
         self._loaded: bool = False
         self._error_msg: str | None = None
@@ -119,6 +125,7 @@ class SAMHandler:
         """
         if checkpoint_path:
             self.checkpoint_path = Path(checkpoint_path)
+            self.model_type = model_type_from_path(self.checkpoint_path)
 
         if not self._sam_installed():
             self._error_msg = (
@@ -132,13 +139,13 @@ class SAMHandler:
                 f"Checkpoint no encontrado: {self.checkpoint_path}\n\n"
                 "Descárgalo desde:\n"
                 "https://github.com/facebookresearch/segment-anything#model-checkpoints\n\n"
-                "Coloca 'sam_vit_l_0b3195.pth' en la carpeta models/"
+                f"Coloca el checkpoint de {self.model_type} en la carpeta models/"
             )
             return False
 
         try:
             from segment_anything import sam_model_registry
-            self._model = sam_model_registry[MODEL_TYPE](
+            self._model = sam_model_registry[self.model_type](
                 checkpoint=str(self.checkpoint_path)
             )
             self._model.to(self._device)
@@ -323,6 +330,7 @@ class SAMHandler:
             "sam_installed": self._sam_installed(),
             "checkpoint_found": self._checkpoint_ok(),
             "model_loaded": self._loaded,
+            "model_type": self.model_type,
             "device": self._device,
             "checkpoint_path": str(self.checkpoint_path) if self.checkpoint_path else "No configurado",
             "error": self._error_msg,

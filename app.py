@@ -2,7 +2,7 @@
 app.py
 ------
 App web de segmentación de imágenes agrícolas / satelitales.
-Construida con Streamlit + PyTorch + SAM ViT-L.
+Construida con Streamlit + PyTorch + SAM.
 
 Ejecutar:
     streamlit run app.py
@@ -33,6 +33,7 @@ _APP_DIR = Path(__file__).parent.resolve()
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
+from core import checkpoint as sam_checkpoint
 from core.segmentation import ClassicSegmenter
 from core.sam_handler import SAMHandler
 from utils.image_io import (
@@ -54,79 +55,27 @@ from utils.visualization import (
 APP_TITLE = "🌾 Segmentación de Imágenes Agrícolas"
 APP_ICON = "🌿"
 
-# Google Drive file ID del checkpoint SAM ViT-L
-_SAM_GDRIVE_FILE_ID = "1Uj9-Shntka1a3k4e49ZFbHHwDV_dC2_d"
-_SAM_FILENAME = "sam_vit_l_0b3195.pth"
-
-# Detectar si la carpeta models/ admite escritura real (falla en /mount/src/ de Streamlit Cloud)
-def _dir_is_writable(path: Path) -> bool:
-    """Prueba escritura real creando y borrando un archivo temporal."""
+def _configured_model_type() -> str:
+    """Variante de SAM a usar: secreto 'sam_model_type' > env SAM_MODEL_TYPE > vit_b."""
+    preferred: str | None = None
     try:
-        path.mkdir(parents=True, exist_ok=True)
-        test = path / ".write_test"
-        test.write_text("x")
-        test.unlink()
-        return True
+        preferred = st.secrets.get("sam_model_type")  # type: ignore[union-attr]
     except Exception:
-        return False
+        preferred = None
+    return sam_checkpoint.resolve_model_type(preferred)
 
-_LOCAL_MODELS_DIR = _APP_DIR / "models"
-if _dir_is_writable(_LOCAL_MODELS_DIR):
-    _SAM_CHECKPOINT_DIR = _LOCAL_MODELS_DIR
-else:
-    _SAM_CHECKPOINT_DIR = Path("/tmp/sam_models")
 
-DEFAULT_SAM_CHECKPOINT = str(_SAM_CHECKPOINT_DIR / _SAM_FILENAME)
+SAM_MODEL_TYPE = _configured_model_type()
+DEFAULT_SAM_CHECKPOINT = str(sam_checkpoint.checkpoint_path(SAM_MODEL_TYPE))
+_SAM_EXPECTED_MB = sam_checkpoint.expected_size(SAM_MODEL_TYPE) // 1024 // 1024
 
 # ---------------------------------------------------------------------------
-# Descarga automática del checkpoint SAM desde Google Drive
+# Descarga automática del checkpoint SAM desde los servidores de Meta
 # ---------------------------------------------------------------------------
 
-def _ensure_sam_checkpoint():
-    """
-    Descarga el checkpoint SAM ViT-L desde Google Drive si no existe en disco.
-    Usa /tmp/sam_models/ en Streamlit Cloud (donde /mount/src/ es read-only).
-    Guarda el error en st.session_state["sam_download_error"] si falla.
-    """
-    import traceback
-
-    checkpoint_path = Path(DEFAULT_SAM_CHECKPOINT)
-    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Ya descargado correctamente
-    if checkpoint_path.exists() and checkpoint_path.stat().st_size > 100_000_000:
-        st.session_state["sam_download_error"] = None
-        return str(checkpoint_path)
-
-    # Marcar que estamos descargando
-    st.session_state["sam_download_error"] = None
-
-    try:
-        import gdown
-        url = f"https://drive.google.com/uc?id={_SAM_GDRIVE_FILE_ID}"
-        result = gdown.download(url, str(checkpoint_path), quiet=False, fuzzy=True)
-
-        if result is None:
-            st.session_state["sam_download_error"] = (
-                "gdown retorno None.\n"
-                "El archivo de Google Drive NO es publico.\n"
-                "Solucion: Drive -> Compartir -> "
-                "'Cualquier persona con el enlace' -> Lector.\n"
-                f"File ID: {_SAM_GDRIVE_FILE_ID}"
-            )
-        elif checkpoint_path.exists() and checkpoint_path.stat().st_size < 100_000_000:
-            mb = checkpoint_path.stat().st_size // 1024 // 1024
-            st.session_state["sam_download_error"] = (
-                f"Descarga incompleta: {mb} MB obtenidos (se esperan ~1200 MB).\n"
-                "Puede ser un problema de permisos o timeout."
-            )
-
-    except Exception:
-        st.session_state["sam_download_error"] = (
-            f"Error en descarga:\n{traceback.format_exc()}"
-        )
-
-    return str(checkpoint_path)
+def _start_sam_download(force: bool = False) -> None:
+    """Lanza (una sola vez por proceso) la descarga del checkpoint en background."""
+    sam_checkpoint.start_download(SAM_MODEL_TYPE, force=force)
 
 # Etiquetas mostradas en el selector (orden → nombre interno)
 METHOD_LABELS: dict[str, str] = {
@@ -243,7 +192,6 @@ def _init_state() -> None:
         "click_points":    [],     # list[(x,y)]
         "click_labels":    [],     # list[int]  1=pos, 0=neg
         "compare_results": {},     # {label: np.ndarray}
-        "sam_download_error": None, # error message from last download attempt
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -254,17 +202,7 @@ _init_state()
 # ---------------------------------------------------------------------------
 # Iniciar descarga del checkpoint SAM en background (no bloquea la UI)
 # ---------------------------------------------------------------------------
-import threading as _threading
-
-def _background_download():
-    """Descarga SAM en un hilo separado para no bloquear el arranque de la UI."""
-    _ensure_sam_checkpoint()
-
-# Lanzar solo una vez usando un flag en session_state
-if "sam_download_started" not in st.session_state:
-    st.session_state["sam_download_started"] = True
-    _t = _threading.Thread(target=_background_download, daemon=True)
-    _t.start()
+_start_sam_download()
 
 # Ruta donde quedará el modelo (puede no existir todavía si sigue descargando)
 _resolved_sam_path = DEFAULT_SAM_CHECKPOINT
@@ -420,7 +358,7 @@ with st.sidebar:
         sam_path = st.text_input(
             "Ruta checkpoint .pth",
             value=_resolved_sam_path,
-            help="Ruta al archivo sam_vit_l_0b3195.pth",
+            help=f"Ruta al archivo {Path(DEFAULT_SAM_CHECKPOINT).name}",
             label_visibility="visible",
         )
 
@@ -441,46 +379,29 @@ with st.sidebar:
                 language="bash",
             )
         else:
-            # Checkpoint no encontrado o descarga incompleta
-            checkpoint_file = Path(sam_path)
-            file_exists = checkpoint_file.exists()
-            file_size_mb = checkpoint_file.stat().st_size // 1024 // 1024 if file_exists else 0
-            file_size_ok = file_size_mb > 100
+            dl = sam_checkpoint.status(SAM_MODEL_TYPE)
+            done_mb = int(dl["downloaded_bytes"]) // 1024 // 1024
 
-            if file_exists and not file_size_ok:
-                # Archivo parcial — descarga en progreso
+            if dl["status"] == "error":
+                st.markdown('<p class="sam-status-err">❌ Error en descarga</p>',
+                            unsafe_allow_html=True)
+                with st.expander("🔍 Ver error"):
+                    st.code(str(dl["error"]), language="text")
+            else:
                 st.markdown(
-                    f'<p class="sam-status-warn">⏬ Descargando… {file_size_mb} MB / ~1200 MB</p>',
+                    f'<p class="sam-status-warn">⏬ Descargando {SAM_MODEL_TYPE}… '
+                    f'{done_mb} MB / ~{_SAM_EXPECTED_MB} MB</p>',
                     unsafe_allow_html=True,
                 )
-                st.caption("Recarga la página en unos minutos para ver el progreso.")
-                if st.button("🔄 Forzar reintento", key="retry_download"):
-                    checkpoint_file.unlink(missing_ok=True)
-                    get_sam_handler.clear()
-                    st.session_state["sam_download_started"] = False
-                    st.rerun()
-            else:
-                # No existe aún — descarga iniciada en background
-                dl_err = st.session_state.get("sam_download_error")
-                if dl_err:
-                    st.markdown('<p class="sam-status-err">❌ Error en descarga</p>',
-                                unsafe_allow_html=True)
-                    with st.expander("🔍 Ver error"):
-                        st.code(dl_err, language="text")
-                else:
-                    st.markdown(
-                        '<p class="sam-status-warn">⏬ Descarga iniciada en background (~1.2 GB)</p>',
-                        unsafe_allow_html=True,
-                    )
-                    st.caption(
-                        f"Guardando en: `{sam_path}`\n\n"
-                        "Puede tardar 3-8 min. Recarga la página para ver el progreso."
-                    )
-                if st.button("🔄 Reintentar descarga", key="retry_download2"):
-                    st.session_state["sam_download_error"] = None
-                    st.session_state["sam_download_started"] = False
-                    _ensure_sam_checkpoint()
-                    st.rerun()
+                st.caption(
+                    f"Guardando en: `{sam_path}`\n\n"
+                    "Recarga la página en unos minutos para ver el progreso."
+                )
+
+            if st.button("🔄 Reintentar descarga", key="retry_download"):
+                get_sam_handler.clear()
+                _start_sam_download(force=True)
+                st.rerun()
 
     st.markdown("---")
     st.caption("ABC Geomática Agrícola SRL · 2026")
@@ -534,7 +455,7 @@ if st.session_state["image_rgb"] is None:
             | 5  | K-Means           | Agrupación por clusters de color         |
             | 6  | Mean-Shift        | Filtrado por densidad de píxeles         |
             | 7  | GrabCut           | Separación fondo / primer plano          |
-            | 8  | SAM (ViT-L)       | Redes neuronales — Meta AI               |
+            | 8  | SAM               | Redes neuronales — Meta AI               |
             """
         )
     with col_img:

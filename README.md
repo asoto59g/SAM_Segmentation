@@ -13,12 +13,14 @@
 
 Aplicación web interactiva para segmentación de imágenes agrícolas y satelitales con 8 métodos, incluyendo PyTorch + SAM (Segment Anything Model).
 
-> ⏬ **Primera carga en Streamlit Cloud:** la app descarga automáticamente el modelo SAM ViT-L (~1.2 GB) desde Google Drive la primera vez que se inicia. Este proceso puede tardar **3 a 8 minutos** dependiendo de la velocidad del servidor. Los **métodos clásicos 1–7 funcionan inmediatamente** sin necesidad del modelo. Una vez descargado, el modelo queda en caché y las cargas siguientes son instantáneas.
+> ⏬ **Primera carga en Streamlit Cloud:** la app descarga automáticamente el checkpoint SAM ViT-B (~375 MB) desde los servidores de Meta la primera vez que se inicia (1–2 minutos). Los **métodos clásicos 1–7 funcionan inmediatamente** sin necesidad del modelo. Una vez descargado, el modelo queda en caché y las cargas siguientes son instantáneas.
+
+> ⚠️ **Memoria en Streamlit Community Cloud:** el límite por app es de ~2.7 GB de RAM. Se usa ViT-B por defecto porque ViT-L (~1.2 GB de pesos) suele provocar el reinicio del contenedor (la app queda en “Connecting…”). Para cambiar de variante, definir `sam_model_type = "vit_l"` en los secrets de la app o la variable de entorno `SAM_MODEL_TYPE` en local.
 
 ## Características
 
 - **7 métodos clásicos**: Otsu, Canny, Region Growing, Watershed, K-Means, Mean-Shift, GrabCut
-- **SAM ViT-L**: Segment Anything Model de Meta con:
+- **SAM (ViT-B por defecto; ViT-L / ViT-H configurables)**: Segment Anything Model de Meta con:
   - Modo automático: segmenta toda la imagen
   - Modo por clic: el usuario indica qué segmentar
 - Soporte para imágenes JPG, PNG, TIF/GeoTIFF
@@ -45,17 +47,20 @@ pip install -r requirements.txt
 pip install git+https://github.com/facebookresearch/segment-anything.git
 ```
 
-### 3. Checkpoint SAM ViT-L
+### 3. Checkpoint SAM
 
-**En Streamlit Cloud:** se descarga automáticamente al iniciar la app. No se requiere ninguna acción manual.
+Se descarga automáticamente al iniciar la app (tanto en local como en Streamlit Cloud) desde
+`https://dl.fbaipublicfiles.com/segment_anything/`. No se requiere ninguna acción manual.
 
-**En local:** descargar el archivo `sam_vit_l_0b3195.pth` (~1.2 GB) desde:
-https://github.com/facebookresearch/segment-anything#model-checkpoints
-
-Colocar el archivo en la carpeta `models/`:
+Si se prefiere colocarlo a mano, guardarlo en la carpeta `models/`:
 ```
 models/
-└── sam_vit_l_0b3195.pth
+└── sam_vit_b_01ec64.pth
+```
+
+Variante alternativa (más precisa, mucho más pesada):
+```bash
+SAM_MODEL_TYPE=vit_l streamlit run app.py
 ```
 
 > **Nota:** Los métodos clásicos (1-7) funcionan sin necesidad del checkpoint SAM.
@@ -77,7 +82,8 @@ app/
 ├── app.py                  # Punto de entrada Streamlit
 ├── core/
 │   ├── segmentation.py     # 7 métodos clásicos de segmentación
-│   └── sam_handler.py      # SAM ViT-L (auto + clic)
+│   ├── checkpoint.py       # Descarga/cache del checkpoint SAM
+│   └── sam_handler.py      # SAM (auto + clic)
 ├── utils/
 │   ├── image_io.py         # Carga/guardado PNG y GeoTIFF
 │   └── visualization.py    # Overlay de máscaras y comparaciones
