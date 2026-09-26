@@ -1,0 +1,32 @@
+﻿# =============================================
+# Dependencias - App Segmentación Imágenes
+# =============================================
+
+# Web app
+streamlit==1.42.0
+
+# Deep Learning - PyTorch CPU
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu
+torchvision==0.21.0+cpu
+
+# Segment Anything Model (SAM) - instalar por separado:
+# pip install git+https://github.com/facebookresearch/segment-anything.git
+
+# Computer Vision
+opencv-python==4.11.0.86
+numpy==1.26.4
+
+# Machine Learning
+scikit-learn==1.6.1
+scikit-image==0.25.1
+
+# Visualización
+matplotlib==3.10.0
+Pillow==11.1.0
+
+# GIS / GeoTIFF
+rasterio==1.4.3
+
+# Streamlit interactivo
+streamlit-image-coordinates==0.4.2
