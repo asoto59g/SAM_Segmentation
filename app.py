@@ -3,44 +3,49 @@ app.py
 ------
 Aplicación Streamlit para segmentación de imágenes con múltiples algoritmos
 (Watershed, Otsu, Felzenszwalb, SLIC, Canny, Chan-Vese, SAM).
-Optimizado para evitar throttling de CPU, RuntimeError en PyTorch y el fallo de tipo en Otsu.
+Incluye captura global de excepciones para prevenir pantallas en blanco.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+import traceback
 import numpy as np
 from PIL import Image
-import cv2
 import streamlit as st
 
-# Algoritmos clásicos de scikit-image
-from skimage.color import rgb2gray
-from skimage.filters import sobel, threshold_otsu
-from skimage.segmentation import watershed, felzenszwalb, slic, chan_vese
-from skimage.feature import canny
-
-# 1. Variables de entorno ANTES de cargar PyTorch/NumPy para limitar hilos de CPU
+# 1. Variables de entorno antes de importar librerías pesadas
 os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 os.environ["OPENBLAS_NUM_THREADS"] = "2"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
 os.environ["NUMEXPR_NUM_THREADS"] = "2"
 
-import torch
-
-# 2. Configuración segura de hilos en PyTorch
 try:
-    torch.set_num_threads(2)
-except Exception:
-    pass
+    # Importaciones de procesamiento de imágenes
+    from skimage.color import rgb2gray
+    from skimage.filters import sobel, threshold_otsu
+    from skimage.segmentation import watershed, felzenszwalb, slic, chan_vese
+    from skimage.feature import canny
 
-try:
-    from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
-    _SAM_INSTALLED = True
-except ImportError:
-    _SAM_INSTALLED = False
+    # Importación segura de PyTorch
+    import torch
+    try:
+        torch.set_num_threads(2)
+    except Exception:
+        pass
+
+    try:
+        from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
+        _SAM_INSTALLED = True
+    except ImportError:
+        _SAM_INSTALLED = False
+
+except Exception as import_err:
+    st.error("Error al importar librerías en el entorno de servidor:")
+    st.code(traceback.format_exc())
+    st.stop()
 
 
 class SAMHandler:
@@ -123,7 +128,6 @@ def run_watershed(image_rgb: np.ndarray, markers_count: int = 16) -> np.ndarray:
 
 
 def run_otsu(image_rgb: np.ndarray) -> np.ndarray:
-    """Procesa Otsu garantizando la conversión explícita a uint8 en escala de 0 a 255."""
     gray_float = rgb2gray(image_rgb)
     gray_uint8 = (gray_float * 255).astype(np.uint8)
     thresh = threshold_otsu(gray_uint8)
@@ -261,4 +265,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as app_err:
+        st.error("Ocurrió un error inesperado en la ejecución de la app:")
+        st.code(traceback.format_exc())
