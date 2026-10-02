@@ -3,7 +3,7 @@ app.py
 ------
 Aplicación Streamlit para segmentación de imágenes con múltiples algoritmos
 (Watershed, Otsu, Felzenszwalb, SLIC, Canny, Chan-Vese, SAM).
-Optimizado para evitar throttling de CPU y errores de hilos de PyTorch.
+Optimizado para evitar throttling de CPU, errores de hilos en PyTorch y fallos de tipo en Otsu.
 """
 
 from __future__ import annotations
@@ -112,7 +112,6 @@ def run_watershed(image_rgb: np.ndarray, markers_count: int = 10) -> np.ndarray:
     gray = rgb2gray(image_rgb)
     elevation_map = sobel(gray)
     markers = np.zeros_like(gray, dtype=int)
-    # Generar marcadores basados en gradiente local
     grid = np.linspace(0, gray.shape[0] - 1, int(np.sqrt(markers_count)), dtype=int)
     grid_y = np.linspace(0, gray.shape[1] - 1, int(np.sqrt(markers_count)), dtype=int)
     count = 1
@@ -125,9 +124,12 @@ def run_watershed(image_rgb: np.ndarray, markers_count: int = 10) -> np.ndarray:
 
 
 def run_otsu(image_rgb: np.ndarray) -> np.ndarray:
-    gray = rgb2gray(image_rgb)
-    thresh = threshold_otsu(gray)
-    return (gray > thresh).astype(int)
+    """Ejecuta la umbralización Otsu convirtiendo la imagen a escala de grises uint8."""
+    gray_float = rgb2gray(image_rgb)
+    gray_uint8 = (gray_float * 255).astype(np.uint8)
+    thresh = threshold_otsu(gray_uint8)
+    binary = (gray_uint8 > thresh).astype(np.uint8) * 255
+    return binary
 
 
 def run_felzenszwalb(image_rgb: np.ndarray, scale: float = 100, sigma: float = 0.5, min_size: int = 50) -> np.ndarray:
@@ -140,12 +142,12 @@ def run_slic(image_rgb: np.ndarray, n_segments: int = 100, compactness: float = 
 
 def run_canny(image_rgb: np.ndarray, sigma: float = 1.0) -> np.ndarray:
     gray = rgb2gray(image_rgb)
-    return canny(gray, sigma=sigma).astype(int)
+    return canny(gray, sigma=sigma).astype(np.uint8) * 255
 
 
 def run_chan_vese(image_rgb: np.ndarray, max_num_iter: int = 100) -> np.ndarray:
     gray = rgb2gray(image_rgb)
-    return chan_vese(gray, max_num_iter=max_num_iter).astype(int)
+    return chan_vese(gray, max_num_iter=max_num_iter).astype(np.uint8) * 255
 
 
 # -----------------------------------------------------------------------------
@@ -197,7 +199,7 @@ def main():
                 res = run_otsu(image_np)
                 with col2:
                     st.subheader("Resultado Otsu")
-                    st.image(res * 255, use_container_width=True)
+                    st.image(res, use_container_width=True)
 
         elif model_choice == "Felzenszwalb":
             scale = st.sidebar.slider("Escala", 10, 500, 100)
@@ -224,7 +226,7 @@ def main():
                 res = run_canny(image_np, sigma)
                 with col2:
                     st.subheader("Bordes Canny")
-                    st.image(res * 255, use_container_width=True)
+                    st.image(res, use_container_width=True)
 
         elif model_choice == "Chan-Vese":
             max_iter = st.sidebar.slider("Máx Iteraciones", 10, 200, 50)
@@ -232,7 +234,7 @@ def main():
                 res = run_chan_vese(image_np, max_iter)
                 with col2:
                     st.subheader("Resultado Chan-Vese")
-                    st.image(res * 255, use_container_width=True)
+                    st.image(res, use_container_width=True)
 
         elif model_choice == "Segment Anything (SAM)":
             sam_type = st.sidebar.selectbox("Tipo SAM", ["vit_b", "vit_l", "vit_h"], index=0)
