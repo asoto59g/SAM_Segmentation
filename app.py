@@ -3,7 +3,7 @@ app.py
 ------
 Aplicación Streamlit para segmentación de imágenes con múltiples algoritmos
 (Watershed, Otsu, Felzenszwalb, SLIC, Canny, Chan-Vese, SAM).
-Optimizado para evitar throttling de CPU, errores de hilos en PyTorch y pantallas en blanco.
+Optimizado para evitar throttling de CPU, RuntimeError en PyTorch y el fallo de tipo en Otsu.
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ from PIL import Image
 import cv2
 import streamlit as st
 
-# Algoritmos clásicos y de scikit-image
+# Algoritmos clásicos de scikit-image
 from skimage.color import rgb2gray
 from skimage.filters import sobel, threshold_otsu
 from skimage.segmentation import watershed, felzenszwalb, slic, chan_vese
 from skimage.feature import canny
 
-# 1. Variables de entorno ANTES de importar PyTorch/NumPy
+# 1. Variables de entorno ANTES de cargar PyTorch/NumPy para limitar hilos de CPU
 os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 os.environ["OPENBLAS_NUM_THREADS"] = "2"
@@ -30,7 +30,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "2"
 
 import torch
 
-# 2. Manejo seguro de hilos de PyTorch
+# 2. Configuración segura de hilos en PyTorch
 try:
     torch.set_num_threads(2)
 except Exception:
@@ -111,9 +111,7 @@ def run_watershed(image_rgb: np.ndarray, markers_count: int = 16) -> np.ndarray:
     gray = rgb2gray(image_rgb)
     elevation_map = sobel(gray)
     markers = np.zeros_like(gray, dtype=int)
-    side = int(np.sqrt(markers_count))
-    if side < 1:
-        side = 1
+    side = max(1, int(np.sqrt(markers_count)))
     grid_x = np.linspace(0, gray.shape[0] - 1, side, dtype=int)
     grid_y = np.linspace(0, gray.shape[1] - 1, side, dtype=int)
     count = 1
@@ -121,11 +119,11 @@ def run_watershed(image_rgb: np.ndarray, markers_count: int = 16) -> np.ndarray:
         for y in grid_y:
             markers[x, y] = count
             count += 1
-    segmentation = watershed(elevation_map, markers)
-    return segmentation
+    return watershed(elevation_map, markers)
 
 
 def run_otsu(image_rgb: np.ndarray) -> np.ndarray:
+    """Procesa Otsu garantizando la conversión explícita a uint8 en escala de 0 a 255."""
     gray_float = rgb2gray(image_rgb)
     gray_uint8 = (gray_float * 255).astype(np.uint8)
     thresh = threshold_otsu(gray_uint8)
@@ -182,7 +180,7 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Imagen Original")
-            st.image(image, use_container_width=True)
+            st.image(image, width="stretch")
 
         st.sidebar.subheader("Parámetros del Algoritmo")
 
@@ -193,14 +191,14 @@ def main():
                 with col2:
                     st.subheader("Resultado Watershed")
                     norm_res = ((res - res.min()) / (res.max() - res.min() + 1e-8) * 255).astype(np.uint8)
-                    st.image(norm_res, use_container_width=True)
+                    st.image(norm_res, width="stretch")
 
         elif model_choice == "Otsu Thresholding":
             if st.button("Ejecutar Otsu"):
                 res = run_otsu(image_np)
                 with col2:
                     st.subheader("Resultado Otsu")
-                    st.image(res, use_container_width=True)
+                    st.image(res, width="stretch")
 
         elif model_choice == "Felzenszwalb":
             scale = st.sidebar.slider("Escala", 10, 500, 100)
@@ -211,7 +209,7 @@ def main():
                 with col2:
                     st.subheader("Resultado Felzenszwalb")
                     norm_res = ((res - res.min()) / (res.max() - res.min() + 1e-8) * 255).astype(np.uint8)
-                    st.image(norm_res, use_container_width=True)
+                    st.image(norm_res, width="stretch")
 
         elif model_choice == "SLIC (Superpixels)":
             n_segments = st.sidebar.slider("Número de segmentos", 20, 500, 100)
@@ -221,7 +219,7 @@ def main():
                 with col2:
                     st.subheader("Resultado SLIC")
                     norm_res = ((res - res.min()) / (res.max() - res.min() + 1e-8) * 255).astype(np.uint8)
-                    st.image(norm_res, use_container_width=True)
+                    st.image(norm_res, width="stretch")
 
         elif model_choice == "Canny Edge Detector":
             sigma = st.sidebar.slider("Sigma", 0.5, 5.0, 1.0)
@@ -229,7 +227,7 @@ def main():
                 res = run_canny(image_np, sigma)
                 with col2:
                     st.subheader("Bordes Canny")
-                    st.image(res, use_container_width=True)
+                    st.image(res, width="stretch")
 
         elif model_choice == "Chan-Vese":
             max_iter = st.sidebar.slider("Máx Iteraciones", 10, 200, 50)
@@ -237,7 +235,7 @@ def main():
                 res = run_chan_vese(image_np, max_iter)
                 with col2:
                     st.subheader("Resultado Chan-Vese")
-                    st.image(res, use_container_width=True)
+                    st.image(res, width="stretch")
 
         elif model_choice == "Segment Anything (SAM)":
             sam_type = st.sidebar.selectbox("Tipo SAM", ["vit_b", "vit_l", "vit_h"], index=0)
@@ -259,7 +257,7 @@ def main():
                             color = np.random.randint(0, 255, size=(3,), dtype=np.uint8)
                             overlay[m] = overlay[m] * 0.5 + color * 0.5
                         st.subheader("Resultado SAM")
-                        st.image(overlay, use_container_width=True)
+                        st.image(overlay, width="stretch")
 
 
 if __name__ == "__main__":
