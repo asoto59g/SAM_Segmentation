@@ -1,28 +1,37 @@
 """
 app.py
 ------
-Aplicación Streamlit para segmentación con Segment Anything (SAM).
-Incluye interfaz gráfica de usuario y optimización de hilos CPU / caché para evitar throttling.
+Aplicación Streamlit para segmentación de imágenes con múltiples algoritmos
+(Watershed, Otsu, Felzenszwalb, SLIC, Canny, Chan-Vese, SAM).
+Optimizado para evitar throttling de CPU y errores de hilos de PyTorch.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+import numpy as np
+from PIL import Image
+import cv2
+import streamlit as st
 
-# 1. Configurar variables de entorno antes de cargar PyTorch/NumPy para controlar hilos
+# Algoritmos clásicos y de scikit-image
+from skimage.color import rgb2gray
+from skimage.filters import sobel, threshold_otsu
+from skimage.segmentation import watershed, felzenszwalb, slic, chan_vese
+from skimage.feature import canny
+from scipy import ndimage as ndi
+
+# 1. Variables de entorno ANTES de importar PyTorch/NumPy
 os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 os.environ["OPENBLAS_NUM_THREADS"] = "2"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
 os.environ["NUMEXPR_NUM_THREADS"] = "2"
 
-import numpy as np
-from PIL import Image
 import torch
-import streamlit as st
 
-# 2. Configuración segura de hilos en PyTorch
+# 2. Manejo seguro de hilos de PyTorch
 try:
     torch.set_num_threads(2)
 except Exception:
@@ -37,29 +46,13 @@ except ImportError:
 
 class SAMHandler:
     def __init__(self, checkpoint_path: str, model_type: str = "vit_b"):
-        """Inicializa el handler de SAM."""
         self.checkpoint_path = checkpoint_path
         self.model_type = model_type
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.sam = None
-        self.mask_generator = None
         self.predictor = None
 
-    def status_info(self) -> dict:
-        """Retorna información sobre la disponibilidad de SAM y el checkpoint."""
-        checkpoint_exists = Path(self.checkpoint_path).exists()
-        file_size_ok = (
-            checkpoint_exists and Path(self.checkpoint_path).stat().st_size > 50_000_000
-        )
-        return {
-            "sam_installed": _SAM_INSTALLED,
-            "checkpoint_found": file_size_ok,
-            "model_loaded": self.sam is not None,
-            "device": self.device,
-        }
-
     def _load_model(self) -> str | None:
-        """Carga los pesos del modelo en memoria si no están cargados."""
         if not _SAM_INSTALLED:
             return "La librería 'segment-anything' no está instalada."
 
@@ -85,7 +78,6 @@ class SAMHandler:
         pred_iou_thresh: float = 0.88,
         min_mask_region_area: int = 500,
     ) -> tuple[list[dict] | None, str | None]:
-        """Genera máscaras automáticas en toda la imagen liberando gradientes de RAM."""
         err = self._load_model()
         if err:
             return None, err
@@ -106,7 +98,6 @@ class SAMHandler:
 
 @st.cache_resource
 def get_sam_handler(checkpoint_path: str, model_type: str = "vit_b") -> SAMHandler:
-    """Instancia y carga el modelo SAM manteniéndolo en la memoria caché de Streamlit."""
     handler = SAMHandler(checkpoint_path=checkpoint_path, model_type=model_type)
     err = handler._load_model()
     if err:
@@ -115,29 +106,70 @@ def get_sam_handler(checkpoint_path: str, model_type: str = "vit_b") -> SAMHandl
 
 
 # -----------------------------------------------------------------------------
+# FUNCIONES DE SEGMENTACIÓN TRADICIONAL
+# -----------------------------------------------------------------------------
+def run_watershed(image_rgb: np.ndarray, markers_count: int = 10) -> np.ndarray:
+    gray = rgb2gray(image_rgb)
+    elevation_map = sobel(gray)
+    markers = np.zeros_like(gray, dtype=int)
+    # Generar marcadores basados en gradiente local
+    grid = np.linspace(0, gray.shape[0] - 1, int(np.sqrt(markers_count)), dtype=int)
+    grid_y = np.linspace(0, gray.shape[1] - 1, int(np.sqrt(markers_count)), dtype=int)
+    count = 1
+    for y in grid:
+        for x in grid_y:
+            markers[y, x] = count
+            count += 1
+    segmentation = watershed(elevation_map, markers)
+    return segmentation
+
+
+def run_otsu(image_rgb: np.ndarray) -> np.ndarray:
+    gray = rgb2gray(image_rgb)
+    thresh = threshold_otsu(gray)
+    return (gray > thresh).astype(int)
+
+
+def run_felzenszwalb(image_rgb: np.ndarray, scale: float = 100, sigma: float = 0.5, min_size: int = 50) -> np.ndarray:
+    return felzenszwalb(image_rgb, scale=scale, sigma=sigma, min_size=min_size)
+
+
+def run_slic(image_rgb: np.ndarray, n_segments: int = 100, compactness: float = 10.0) -> np.ndarray:
+    return slic(image_rgb, n_segments=n_segments, compactness=compactness, start_label=1)
+
+
+def run_canny(image_rgb: np.ndarray, sigma: float = 1.0) -> np.ndarray:
+    gray = rgb2gray(image_rgb)
+    return canny(gray, sigma=sigma).astype(int)
+
+
+def run_chan_vese(image_rgb: np.ndarray, max_num_iter: int = 100) -> np.ndarray:
+    gray = rgb2gray(image_rgb)
+    return chan_vese(gray, max_num_iter=max_num_iter).astype(int)
+
+
+# -----------------------------------------------------------------------------
 # INTERFAZ DE USUARIO (STREAMLIT UI)
 # -----------------------------------------------------------------------------
 def main():
-    st.set_page_config(page_title="Segment Anything (SAM)", layout="wide")
-    st.title("Segment Anything (SAM) App")
+    st.set_page_config(page_title="Herramienta de Segmentación de Imágenes", layout="wide")
+    st.title("Procesamiento y Segmentación de Imágenes")
 
-    # Panel lateral para seleccionar opciones
-    st.sidebar.header("Configuración del Modelo")
-    model_type = st.sidebar.selectbox("Tipo de Modelo", ["vit_b", "vit_l", "vit_h"], index=0)
-    
-    # Ruta del archivo de checkpoint (.pth)
-    default_ckpt = f"sam_{model_type}.pth"
-    checkpoint_path = st.sidebar.text_input("Ruta del Checkpoint (.pth)", value=default_ckpt)
+    st.sidebar.header("Selección de Algoritmo")
+    model_choice = st.sidebar.selectbox(
+        "Selecciona el modelo/algoritmo:",
+        [
+            "Watershed",
+            "Otsu Thresholding",
+            "Felzenszwalb",
+            "SLIC (Superpixels)",
+            "Canny Edge Detector",
+            "Chan-Vese",
+            "Segment Anything (SAM)",
+        ],
+    )
 
-    # Carga del Handler optimizado
-    sam_handler = get_sam_handler(checkpoint_path=checkpoint_path, model_type=model_type)
-    
-    # Mostrar estado del sistema
-    status = sam_handler.status_info()
-    with st.sidebar.expander("Estado del Entorno", expanded=False):
-        st.json(status)
-
-    st.header("Carga de Imagen")
+    st.header("1. Carga de Imagen")
     uploaded_file = st.file_uploader("Selecciona una imagen...", type=["jpg", "jpeg", "png"])
 
     if uploaded_file is not None:
@@ -149,33 +181,80 @@ def main():
             st.subheader("Imagen Original")
             st.image(image, use_container_width=True)
 
-        # Ajuste de parámetros de inferencia
-        st.sidebar.subheader("Parámetros de Segmentación")
-        points_per_side = st.sidebar.slider("Puntos por lado (points_per_side)", 4, 16, 8)
-        pred_iou_thresh = st.sidebar.slider("Umbral IOU (pred_iou_thresh)", 0.5, 1.0, 0.88)
+        st.sidebar.subheader("Parámetros del Algoritmo")
 
-        if st.button("Ejecutar Segmentación Automática"):
-            with st.spinner("Procesando segmentación en CPU..."):
-                masks, err = sam_handler.auto_segment(
-                    image_np,
-                    points_per_side=points_per_side,
-                    pred_iou_thresh=pred_iou_thresh,
-                )
-
-            if err:
-                st.error(err)
-            elif masks:
-                st.success(f"Se generaron {len(masks)} máscaras.")
+        # Configuración según el modelo seleccionado
+        if model_choice == "Watershed":
+            markers_count = st.sidebar.slider("Número de marcadores", 4, 100, 16)
+            if st.button("Ejecutar Watershed"):
+                res = run_watershed(image_np, markers_count)
                 with col2:
-                    st.subheader("Resultado de Segmentación")
-                    # Crear superposición visual de máscaras
-                    overlay = image_np.copy()
-                    for mask in masks:
-                        m = mask["segmentation"]
-                        color = np.random.randint(0, 255, size=(3,), dtype=np.uint8)
-                        overlay[m] = overlay[m] * 0.5 + color * 0.5
-                    
-                    st.image(overlay, use_container_width=True)
+                    st.subheader("Resultado Watershed")
+                    st.image(res / res.max(), use_container_width=True)
+
+        elif model_choice == "Otsu Thresholding":
+            if st.button("Ejecutar Otsu"):
+                res = run_otsu(image_np)
+                with col2:
+                    st.subheader("Resultado Otsu")
+                    st.image(res * 255, use_container_width=True)
+
+        elif model_choice == "Felzenszwalb":
+            scale = st.sidebar.slider("Escala", 10, 500, 100)
+            sigma = st.sidebar.slider("Sigma", 0.1, 3.0, 0.5)
+            min_size = st.sidebar.slider("Tamaño Mínimo", 10, 200, 50)
+            if st.button("Ejecutar Felzenszwalb"):
+                res = run_felzenszwalb(image_np, scale, sigma, min_size)
+                with col2:
+                    st.subheader("Resultado Felzenszwalb")
+                    st.image(res / res.max(), use_container_width=True)
+
+        elif model_choice == "SLIC (Superpixels)":
+            n_segments = st.sidebar.slider("Número de segmentos", 20, 500, 100)
+            compactness = st.sidebar.slider("Compacidad", 1.0, 50.0, 10.0)
+            if st.button("Ejecutar SLIC"):
+                res = run_slic(image_np, n_segments, compactness)
+                with col2:
+                    st.subheader("Resultado SLIC")
+                    st.image(res / res.max(), use_container_width=True)
+
+        elif model_choice == "Canny Edge Detector":
+            sigma = st.sidebar.slider("Sigma", 0.5, 5.0, 1.0)
+            if st.button("Ejecutar Canny"):
+                res = run_canny(image_np, sigma)
+                with col2:
+                    st.subheader("Bordes Canny")
+                    st.image(res * 255, use_container_width=True)
+
+        elif model_choice == "Chan-Vese":
+            max_iter = st.sidebar.slider("Máx Iteraciones", 10, 200, 50)
+            if st.button("Ejecutar Chan-Vese"):
+                res = run_chan_vese(image_np, max_iter)
+                with col2:
+                    st.subheader("Resultado Chan-Vese")
+                    st.image(res * 255, use_container_width=True)
+
+        elif model_choice == "Segment Anything (SAM)":
+            sam_type = st.sidebar.selectbox("Tipo SAM", ["vit_b", "vit_l", "vit_h"], index=0)
+            ckpt_path = st.sidebar.text_input("Ruta Checkpoint", value=f"sam_{sam_type}.pth")
+            points_per_side = st.sidebar.slider("Puntos por lado", 4, 16, 8)
+
+            sam_handler = get_sam_handler(ckpt_path, sam_type)
+            if st.button("Ejecutar SAM"):
+                with st.spinner("Procesando en CPU..."):
+                    masks, err = sam_handler.auto_segment(image_np, points_per_side=points_per_side)
+                if err:
+                    st.error(err)
+                elif masks:
+                    st.success(f"Se generaron {len(masks)} máscaras.")
+                    with col2:
+                        overlay = image_np.copy()
+                        for mask in masks:
+                            m = mask["segmentation"]
+                            color = np.random.randint(0, 255, size=(3,), dtype=np.uint8)
+                            overlay[m] = overlay[m] * 0.5 + color * 0.5
+                        st.subheader("Resultado SAM")
+                        st.image(overlay, use_container_width=True)
 
 
 if __name__ == "__main__":
