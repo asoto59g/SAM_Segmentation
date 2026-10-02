@@ -2,8 +2,7 @@
 app.py
 ------
 Aplicación Streamlit para segmentación con Segment Anything (SAM).
-Optimizado para evitar el error de hilos en PyTorch, prevenir el throttling de CPU
-y mantener la instancia en caché.
+Optimizado para evitar throttling de CPU en Streamlit Cloud y errores de hilos en PyTorch.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# 1. Variables de entorno DEBEN ir antes de importar torch o numpy
+# 1. Configurar hilos mediante variables de entorno ANTES de importar PyTorch/NumPy
 os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 os.environ["OPENBLAS_NUM_THREADS"] = "2"
@@ -22,15 +21,10 @@ import numpy as np
 import torch
 import streamlit as st
 
-# 2. Manejo seguro de hilos de PyTorch para evitar RuntimeError
+# 2. Asignación de hilos segura (dentro de try/except)
 try:
     torch.set_num_threads(2)
 except Exception:
-    pass
-
-try:
-    torch.set_num_interop_threads(2)
-except RuntimeError:
     pass
 
 try:
@@ -92,7 +86,7 @@ class SAMHandler:
     def auto_segment(
         self,
         image_rgb: np.ndarray,
-        points_per_side: int = 8,  # Reducido de 12 a 8 para reducir carga de CPU
+        points_per_side: int = 8,  # Reducido para evitar congelamiento de CPU
         pred_iou_thresh: float = 0.88,
         min_mask_region_area: int = 500,
     ) -> tuple[list[dict] | None, str | None]:
@@ -102,7 +96,7 @@ class SAMHandler:
             return None, err
 
         try:
-            with torch.no_grad():  # Desactiva autodiferenciación para evitar fugas de memoria
+            with torch.no_grad():  # Desactiva autodiferenciación
                 generator = SamAutomaticMaskGenerator(
                     model=self.sam,
                     points_per_side=points_per_side,
@@ -129,7 +123,7 @@ class SAMHandler:
             return None, "No se proporcionaron puntos de interés."
 
         try:
-            with torch.no_grad():  # Desactiva autodiferenciación para evitar fugas de memoria
+            with torch.no_grad():  # Desactiva autodiferenciación
                 self.predictor.set_image(image_rgb)
                 input_points = np.array(points)
                 input_labels = np.array(labels)
@@ -149,7 +143,7 @@ class SAMHandler:
             return None, f"Error durante segmentación por puntos: {exc}"
 
 
-# 3. Función en caché para no recargar el modelo en cada interacción
+# 3. Mantener instancia en caché para evitar consumo innecesario en cada re-ejecución
 @st.cache_resource
 def get_sam_handler(checkpoint_path: str, model_type: str = "vit_b") -> SAMHandler:
     handler = SAMHandler(checkpoint_path=checkpoint_path, model_type=model_type)
