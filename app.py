@@ -1,8 +1,7 @@
 """
 app.py
 ------
-Punto de entrada principal para la aplicación de segmentación en Streamlit Cloud.
-Optimizado con control de hilos de CPU y caché para evitar throttling de recursos.
+Punto de entrada para la app de segmentación en Streamlit Cloud.
 """
 
 from __future__ import annotations
@@ -12,14 +11,14 @@ import sys
 from pathlib import Path
 import traceback
 
-# 1. Configurar variables de entorno antes de importar PyTorch/NumPy para limitar hilos de CPU
+# 1. Ajuste estricto de variables de entorno para hilos CPU
 os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 os.environ["OPENBLAS_NUM_THREADS"] = "2"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
 os.environ["NUMEXPR_NUM_THREADS"] = "2"
 
-# 2. Configurar el path del sistema para que encuentre los módulos 'core' y 'utils'
+# 2. Asegurar rutas del proyecto
 _APP_DIR = Path(__file__).resolve().parent
 _CWD = Path.cwd().resolve()
 
@@ -29,7 +28,9 @@ for _path in [_APP_DIR, _CWD]:
 
 import streamlit as st
 
-# 3. Bloque de seguridad para mostrar cualquier fallo de importación en pantalla
+# Configuración de página DEBE ser la primera instrucción de Streamlit
+st.set_page_config(page_title="Herramienta de Segmentación", layout="wide")
+
 try:
     import torch
     try:
@@ -40,29 +41,24 @@ try:
     from PIL import Image
     import numpy as np
 
-    # Importaciones de los módulos del proyecto
     from core.segmentation import ClassicSegmenter
     from core.sam_handler import SAMHandler
-    from utils.image_io import image_from_bytes, image_to_bytes
-
 except Exception as import_err:
-    st.error("Error al cargar los módulos o dependencias del proyecto:")
+    st.error("Error al importar librerías:")
     st.code(traceback.format_exc())
     st.stop()
 
 
-# 4. Instancia de SAM con Caché de Streamlit para evitar recargas constantes
 @st.cache_resource
 def get_sam_handler(checkpoint_path: str, model_type: str = "vit_b") -> SAMHandler:
     handler = SAMHandler(checkpoint_path=checkpoint_path, model_type=model_type)
     err = handler._load_model()
     if err:
-        st.error(f"Error al inicializar SAM: {err}")
+        st.error(f"Error cargando SAM: {err}")
     return handler
 
 
 def main():
-    st.set_page_config(page_title="Herramienta de Segmentación", layout="wide")
     st.title("Procesamiento y Segmentación de Imágenes")
 
     st.sidebar.header("Opciones de Segmentación")
@@ -122,8 +118,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as app_err:
-        st.error("Ocurrió un error inesperado al ejecutar la aplicación:")
-        st.code(traceback.format_exc())
+    main()
