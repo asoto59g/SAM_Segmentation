@@ -2,6 +2,7 @@
 core/sam_handler.py
 -------------------
 Manejo de la inferencia y carga de modelos Segment Anything (SAM).
+Optimizado con torch.no_grad() para ahorro estricto de memoria RAM.
 """
 
 from __future__ import annotations
@@ -59,9 +60,9 @@ class SAMHandler:
             return f"Checkpoint no encontrado en: {self.checkpoint_path}"
 
         try:
-            # Sincronizado con la arquitectura 'vit_b' (375 MB)
             self.sam = sam_model_registry[self.model_type](checkpoint=self.checkpoint_path)
             self.sam.to(device=self.device)
+            self.sam.eval()  # Modo evaluación
             self.predictor = SamPredictor(self.sam)
             return None
         except Exception as exc:
@@ -74,19 +75,20 @@ class SAMHandler:
         pred_iou_thresh: float = 0.88,
         min_mask_region_area: int = 500,
     ) -> tuple[list[dict] | None, str | None]:
-        """Genera máscaras automáticas en toda la imagen."""
+        """Genera máscaras automáticas en toda la imagen liberando gradientes de RAM."""
         err = self._load_model()
         if err:
             return None, err
 
         try:
-            generator = SamAutomaticMaskGenerator(
-                model=self.sam,
-                points_per_side=points_per_side,
-                pred_iou_thresh=pred_iou_thresh,
-                min_mask_region_area=min_mask_region_area,
-            )
-            masks = generator.generate(image_rgb)
+            with torch.no_grad():  # Desactiva autodiferenciación para evitar fugas de memoria
+                generator = SamAutomaticMaskGenerator(
+                    model=self.sam,
+                    points_per_side=points_per_side,
+                    pred_iou_thresh=pred_iou_thresh,
+                    min_mask_region_area=min_mask_region_area,
+                )
+                masks = generator.generate(image_rgb)
             return masks, None
         except Exception as exc:
             return None, f"Error durante segmentación automática: {exc}"
@@ -106,17 +108,17 @@ class SAMHandler:
             return None, "No se proporcionaron puntos de interés."
 
         try:
-            self.predictor.set_image(image_rgb)
-            input_points = np.array(points)
-            input_labels = np.array(labels)
+            with torch.no_grad():  # Desactiva autodiferenciación para evitar fugas de memoria
+                self.predictor.set_image(image_rgb)
+                input_points = np.array(points)
+                input_labels = np.array(labels)
 
-            masks_raw, scores, _ = self.predictor.predict(
-                point_coords=input_points,
-                point_labels=input_labels,
-                multimask_output=True,
-            )
+                masks_raw, scores, _ = self.predictor.predict(
+                    point_coords=input_points,
+                    point_labels=input_labels,
+                    multimask_output=True,
+                )
 
-            # Seleccionar la máscara con mayor puntuación
             best_idx = np.argmax(scores)
             selected_mask = masks_raw[best_idx]
 
