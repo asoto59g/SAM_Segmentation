@@ -1,27 +1,28 @@
 """
-app.py / core/sam_handler.py
-----------------------------
-Manejo de la inferencia y carga de modelos Segment Anything (SAM).
-Optimizado con torch.no_grad(), caché de Streamlit y control de hilos de CPU
-para evitar throttling en Streamlit Cloud.
+app.py
+------
+Aplicación Streamlit para segmentación con Segment Anything (SAM).
+Optimizado para evitar el error de hilos en PyTorch, prevenir el throttling de CPU
+y mantener la instancia en caché.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-import numpy as np
-import torch
-import streamlit as st
 
-# 1. Configurar variables de entorno antes de cualquier cálculo para controlar librerías C/C++
+# 1. Variables de entorno DEBEN ir antes de importar torch o numpy
 os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 os.environ["OPENBLAS_NUM_THREADS"] = "2"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
 os.environ["NUMEXPR_NUM_THREADS"] = "2"
 
-# 2. Configurar hilos en PyTorch de forma segura evitando RuntimeError
+import numpy as np
+import torch
+import streamlit as st
+
+# 2. Manejo seguro de hilos de PyTorch para evitar RuntimeError
 try:
     torch.set_num_threads(2)
 except Exception:
@@ -91,7 +92,7 @@ class SAMHandler:
     def auto_segment(
         self,
         image_rgb: np.ndarray,
-        points_per_side: int = 8,  # Ajustado a 8 para minimizar uso de CPU
+        points_per_side: int = 8,  # Reducido de 12 a 8 para reducir carga de CPU
         pred_iou_thresh: float = 0.88,
         min_mask_region_area: int = 500,
     ) -> tuple[list[dict] | None, str | None]:
@@ -148,11 +149,11 @@ class SAMHandler:
             return None, f"Error durante segmentación por puntos: {exc}"
 
 
-# 3. Función en caché para instanciar el Handler y evitar recargas al reejecutar el script
+# 3. Función en caché para no recargar el modelo en cada interacción
 @st.cache_resource
 def get_sam_handler(checkpoint_path: str, model_type: str = "vit_b") -> SAMHandler:
     handler = SAMHandler(checkpoint_path=checkpoint_path, model_type=model_type)
     err = handler._load_model()
     if err:
-        st.error(f"Error al inicializar SAM: {err}")
+        st.error(f"Error cargando SAM: {err}")
     return handler
