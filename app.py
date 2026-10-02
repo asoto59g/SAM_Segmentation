@@ -7,23 +7,24 @@ Optimizado para ejecución local y Streamlit Cloud.
 
 from __future__ import annotations
 
-import concurrent.futures
 import os
 import sys
-import urllib.request
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Forzar la raíz del proyecto en sys.path para Streamlit Cloud
+# ---------------------------------------------------------------------------
+_APP_DIR = Path(__file__).resolve().parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+
+import concurrent.futures
+import urllib.request
 import numpy as np
 import streamlit as st
 from PIL import Image
 
-# ---------------------------------------------------------------------------
-# Ajustar sys.path para importar módulos locales
-# ---------------------------------------------------------------------------
-_APP_DIR = Path(__file__).parent.resolve()
-if str(_APP_DIR) not in sys.path:
-    sys.path.insert(0, str(_APP_DIR))
-
+# Importaciones de módulos locales (deben ir después de ajustar sys.path)
 from core.segmentation import ClassicSegmenter
 from core.sam_handler import SAMHandler
 from utils.image_io import (
