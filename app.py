@@ -2,7 +2,7 @@
 core/sam_handler.py
 -------------------
 Manejo de la inferencia y carga de modelos Segment Anything (SAM).
-Optimizado con torch.no_grad() para ahorro estricto de memoria RAM.
+Optimizado con torch.no_grad() y restricción de hilos CPU para evitar throttling en Streamlit Cloud.
 """
 
 from __future__ import annotations
@@ -11,6 +11,10 @@ import os
 from pathlib import Path
 import numpy as np
 import torch
+
+# Limitar hilos de CPU en PyTorch para no sobrepasar los recursos de Streamlit Cloud
+torch.set_num_threads(2)
+torch.set_num_interop_threads(2)
 
 try:
     from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
@@ -71,7 +75,7 @@ class SAMHandler:
     def auto_segment(
         self,
         image_rgb: np.ndarray,
-        points_per_side: int = 12,
+        points_per_side: int = 8,  # Reducido de 12 a 8 para minimizar consumo de CPU
         pred_iou_thresh: float = 0.88,
         min_mask_region_area: int = 500,
     ) -> tuple[list[dict] | None, str | None]:
