@@ -2,7 +2,7 @@
 core/sam_handler.py
 -------------------
 Manejo de la inferencia y carga de modelos Segment Anything (SAM).
-Optimizado con torch.no_grad() y restricción de hilos CPU para evitar throttling en Streamlit Cloud.
+Optimizado con torch.no_grad() y control de hilos de CPU para evitar throttling en Streamlit Cloud.
 """
 
 from __future__ import annotations
@@ -12,9 +12,23 @@ from pathlib import Path
 import numpy as np
 import torch
 
-# Limitar hilos de CPU en PyTorch para no sobrepasar los recursos de Streamlit Cloud
-torch.set_num_threads(2)
-torch.set_num_interop_threads(2)
+# 1. Configurar variables de entorno antes de cualquier cálculo para controlar librerías C/C++
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
+os.environ["NUMEXPR_NUM_THREADS"] = "2"
+
+# 2. Configurar hilos en PyTorch de forma segura evitando RuntimeError
+try:
+    torch.set_num_threads(2)
+except Exception:
+    pass
+
+try:
+    torch.set_num_interop_threads(2)
+except RuntimeError:
+    pass
 
 try:
     from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
@@ -75,7 +89,7 @@ class SAMHandler:
     def auto_segment(
         self,
         image_rgb: np.ndarray,
-        points_per_side: int = 8,  # Reducido de 12 a 8 para minimizar consumo de CPU
+        points_per_side: int = 8,  # Ajustado a 8 para minimizar consumo de CPU
         pred_iou_thresh: float = 0.88,
         min_mask_region_area: int = 500,
     ) -> tuple[list[dict] | None, str | None]:
