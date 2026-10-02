@@ -1,7 +1,8 @@
 """
 app.py
 ------
-Punto de entrada para la app de segmentación en Streamlit Cloud.
+Aplicación Streamlit para segmentación con múltiples modelos.
+Diseñado con Lazy Loading para evitar colapsos de memoria (Segfault/Oh No) en Streamlit Cloud.
 """
 
 from __future__ import annotations
@@ -11,46 +12,40 @@ import sys
 from pathlib import Path
 import traceback
 
-# 1. Ajuste estricto de variables de entorno para hilos CPU
-os.environ["OMP_NUM_THREADS"] = "2"
-os.environ["MKL_NUM_THREADS"] = "2"
-os.environ["OPENBLAS_NUM_THREADS"] = "2"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
-os.environ["NUMEXPR_NUM_THREADS"] = "2"
+# Configuración de recursos a nivel de SO
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
-# 2. Asegurar rutas del proyecto
-_APP_DIR = Path(__file__).resolve().parent
-_CWD = Path.cwd().resolve()
-
-for _path in [_APP_DIR, _CWD]:
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
-
+import numpy as np
+from PIL import Image
 import streamlit as st
 
-# Configuración de página DEBE ser la primera instrucción de Streamlit
+# La configuración de página DEBE ser el primer comando de Streamlit
 st.set_page_config(page_title="Herramienta de Segmentación", layout="wide")
 
-try:
-    import torch
-    try:
-        torch.set_num_threads(2)
-    except Exception:
-        pass
-
-    from PIL import Image
-    import numpy as np
-
-    from core.segmentation import ClassicSegmenter
-    from core.sam_handler import SAMHandler
-except Exception as import_err:
-    st.error("Error al importar librerías:")
-    st.code(traceback.format_exc())
-    st.stop()
+# Rutas del sistema
+_APP_DIR = Path(__file__).resolve().parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
 
 
+# Importaciones perezosas para evitar colapsos de PyTorch al arrancar
+def load_skimage_modules():
+    from skimage.color import rgb2gray
+    from skimage.filters import sobel, threshold_otsu
+    from skimage.segmentation import watershed, felzenszwalb, slic, chan_vese
+    from skimage.feature import canny
+    return rgb2gray, sobel, threshold_otsu, watershed, felzenszwalb, slic, chan_vese, canny
+
+
+# Cargar SAM bajo demanda con caché de Streamlit
 @st.cache_resource
-def get_sam_handler(checkpoint_path: str, model_type: str = "vit_b") -> SAMHandler:
+def get_sam_handler(checkpoint_path: str, model_type: str = "vit_b"):
+    import torch
+    torch.set_num_threads(1)
+    from core.sam_handler import SAMHandler
+    
     handler = SAMHandler(checkpoint_path=checkpoint_path, model_type=model_type)
     err = handler._load_model()
     if err:
@@ -61,9 +56,9 @@ def get_sam_handler(checkpoint_path: str, model_type: str = "vit_b") -> SAMHandl
 def main():
     st.title("Procesamiento y Segmentación de Imágenes")
 
-    st.sidebar.header("Opciones de Segmentación")
+    st.sidebar.header("Selección de Algoritmo")
     model_choice = st.sidebar.selectbox(
-        "Selecciona el algoritmo:",
+        "Selecciona el modelo/algoritmo:",
         [
             "Watershed",
             "Otsu Thresholding",
@@ -92,9 +87,10 @@ def main():
             points_per_side = st.sidebar.slider("Puntos por lado", 4, 16, 8)
 
             if st.button("Ejecutar SAM"):
-                sam_handler = get_sam_handler(ckpt_path, sam_type)
-                with st.spinner("Procesando en CPU..."):
+                with st.spinner("Cargando modelo SAM en CPU..."):
+                    sam_handler = get_sam_handler(ckpt_path, sam_type)
                     masks, err = sam_handler.auto_segment(image_np, points_per_side=points_per_side)
+                
                 if err:
                     st.error(err)
                 elif masks:
@@ -107,15 +103,54 @@ def main():
                             overlay[m] = overlay[m] * 0.5 + color * 0.5
                         st.subheader("Resultado SAM")
                         st.image(overlay, width="stretch")
+
         else:
-            segmenter = ClassicSegmenter()
-            if st.button("Ejecutar Segmentación"):
-                with st.spinner("Procesando..."):
-                    res = segmenter.run(model_choice, image_np)
+            if st.button(f"Ejecutar {model_choice}"):
+                rgb2gray, sobel, threshold_otsu, watershed, felzenszwalb, slic, chan_vese, canny = load_skimage_modules()
+                
                 with col2:
                     st.subheader(f"Resultado {model_choice}")
-                    st.image(res, width="stretch")
+                    if model_choice == "Otsu Thresholding":
+                        gray_float = rgb2gray(image_np)
+                        gray_uint8 = (gray_float * 255).astype(np.uint8)
+                        thresh = threshold_otsu(gray_uint8)
+                        res = (gray_uint8 > thresh).astype(np.uint8) * 255
+                        st.image(res, width="stretch")
+
+                    elif model_choice == "Canny Edge Detector":
+                        gray = rgb2gray(image_np)
+                        res = canny(gray, sigma=1.0).astype(np.uint8) * 255
+                        st.image(res, width="stretch")
+
+                    elif model_choice == "SLIC (Superpixels)":
+                        res = slic(image_np, n_segments=100, compactness=10.0, start_label=1)
+                        norm_res = ((res - res.min()) / (res.max() - res.min() + 1e-8) * 255).astype(np.uint8)
+                        st.image(norm_res, width="stretch")
+
+                    elif model_choice == "Felzenszwalb":
+                        res = felzenszwalb(image_np, scale=100, sigma=0.5, min_size=50)
+                        norm_res = ((res - res.min()) / (res.max() - res.min() + 1e-8) * 255).astype(np.uint8)
+                        st.image(norm_res, width="stretch")
+
+                    elif model_choice == "Watershed":
+                        gray = rgb2gray(image_np)
+                        elevation_map = sobel(gray)
+                        markers = np.zeros_like(gray, dtype=int)
+                        markers[0, 0] = 1
+                        markers[-1, -1] = 2
+                        res = watershed(elevation_map, markers)
+                        norm_res = ((res - res.min()) / (res.max() - res.min() + 1e-8) * 255).astype(np.uint8)
+                        st.image(norm_res, width="stretch")
+
+                    elif model_choice == "Chan-Vese":
+                        gray = rgb2gray(image_np)
+                        res = chan_vese(gray, max_num_iter=50).astype(np.uint8) * 255
+                        st.image(res, width="stretch")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        st.error("Error inesperado:")
+        st.code(traceback.format_exc())

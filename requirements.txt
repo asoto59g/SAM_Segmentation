@@ -1,12 +1,9 @@
-﻿streamlit>=1.35.0
-torch
+﻿--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
 torchvision
-git+https://github.com/facebookresearch/segment-anything.git
-opencv-python-headless
-numpy<2.0.0
-scikit-learn
+segment-anything
 scikit-image
-matplotlib
-Pillow
-rasterio
-streamlit-image-coordinates
+opencv-python-headless
+pillow
+numpy<2.0.0
+streamlit
