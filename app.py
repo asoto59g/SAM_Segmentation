@@ -3,7 +3,7 @@ app.py
 ------
 Aplicación Streamlit para segmentación de imágenes con múltiples algoritmos
 (Watershed, Otsu, Felzenszwalb, SLIC, Canny, Chan-Vese, SAM).
-Optimizado para evitar throttling de CPU, errores de hilos en PyTorch y fallos de tipo en Otsu.
+Optimizado para evitar throttling de CPU, errores de hilos en PyTorch y pantallas en blanco.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from skimage.color import rgb2gray
 from skimage.filters import sobel, threshold_otsu
 from skimage.segmentation import watershed, felzenszwalb, slic, chan_vese
 from skimage.feature import canny
-from scipy import ndimage as ndi
 
 # 1. Variables de entorno ANTES de importar PyTorch/NumPy
 os.environ["OMP_NUM_THREADS"] = "2"
@@ -108,23 +107,25 @@ def get_sam_handler(checkpoint_path: str, model_type: str = "vit_b") -> SAMHandl
 # -----------------------------------------------------------------------------
 # FUNCIONES DE SEGMENTACIÓN TRADICIONAL
 # -----------------------------------------------------------------------------
-def run_watershed(image_rgb: np.ndarray, markers_count: int = 10) -> np.ndarray:
+def run_watershed(image_rgb: np.ndarray, markers_count: int = 16) -> np.ndarray:
     gray = rgb2gray(image_rgb)
     elevation_map = sobel(gray)
     markers = np.zeros_like(gray, dtype=int)
-    grid = np.linspace(0, gray.shape[0] - 1, int(np.sqrt(markers_count)), dtype=int)
-    grid_y = np.linspace(0, gray.shape[1] - 1, int(np.sqrt(markers_count)), dtype=int)
+    side = int(np.sqrt(markers_count))
+    if side < 1:
+        side = 1
+    grid_x = np.linspace(0, gray.shape[0] - 1, side, dtype=int)
+    grid_y = np.linspace(0, gray.shape[1] - 1, side, dtype=int)
     count = 1
-    for y in grid:
-        for x in grid_y:
-            markers[y, x] = count
+    for x in grid_x:
+        for y in grid_y:
+            markers[x, y] = count
             count += 1
     segmentation = watershed(elevation_map, markers)
     return segmentation
 
 
 def run_otsu(image_rgb: np.ndarray) -> np.ndarray:
-    """Ejecuta la umbralización Otsu convirtiendo la imagen a escala de grises uint8."""
     gray_float = rgb2gray(image_rgb)
     gray_uint8 = (gray_float * 255).astype(np.uint8)
     thresh = threshold_otsu(gray_uint8)
@@ -185,14 +186,14 @@ def main():
 
         st.sidebar.subheader("Parámetros del Algoritmo")
 
-        # Configuración según el modelo seleccionado
         if model_choice == "Watershed":
             markers_count = st.sidebar.slider("Número de marcadores", 4, 100, 16)
             if st.button("Ejecutar Watershed"):
                 res = run_watershed(image_np, markers_count)
                 with col2:
                     st.subheader("Resultado Watershed")
-                    st.image(res / res.max(), use_container_width=True)
+                    norm_res = ((res - res.min()) / (res.max() - res.min() + 1e-8) * 255).astype(np.uint8)
+                    st.image(norm_res, use_container_width=True)
 
         elif model_choice == "Otsu Thresholding":
             if st.button("Ejecutar Otsu"):
@@ -209,7 +210,8 @@ def main():
                 res = run_felzenszwalb(image_np, scale, sigma, min_size)
                 with col2:
                     st.subheader("Resultado Felzenszwalb")
-                    st.image(res / res.max(), use_container_width=True)
+                    norm_res = ((res - res.min()) / (res.max() - res.min() + 1e-8) * 255).astype(np.uint8)
+                    st.image(norm_res, use_container_width=True)
 
         elif model_choice == "SLIC (Superpixels)":
             n_segments = st.sidebar.slider("Número de segmentos", 20, 500, 100)
@@ -218,7 +220,8 @@ def main():
                 res = run_slic(image_np, n_segments, compactness)
                 with col2:
                     st.subheader("Resultado SLIC")
-                    st.image(res / res.max(), use_container_width=True)
+                    norm_res = ((res - res.min()) / (res.max() - res.min() + 1e-8) * 255).astype(np.uint8)
+                    st.image(norm_res, use_container_width=True)
 
         elif model_choice == "Canny Edge Detector":
             sigma = st.sidebar.slider("Sigma", 0.5, 5.0, 1.0)
@@ -241,8 +244,8 @@ def main():
             ckpt_path = st.sidebar.text_input("Ruta Checkpoint", value=f"sam_{sam_type}.pth")
             points_per_side = st.sidebar.slider("Puntos por lado", 4, 16, 8)
 
-            sam_handler = get_sam_handler(ckpt_path, sam_type)
             if st.button("Ejecutar SAM"):
+                sam_handler = get_sam_handler(ckpt_path, sam_type)
                 with st.spinner("Procesando en CPU..."):
                     masks, err = sam_handler.auto_segment(image_np, points_per_side=points_per_side)
                 if err:
