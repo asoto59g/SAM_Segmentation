@@ -3,7 +3,7 @@ app.py
 ------
 App web de segmentación de imágenes agrícolas / satelitales.
 Construida con Streamlit + PyTorch + SAM.
-Optimizado contra Segfaults en GrabCut y throttling de CPU en Streamlit Cloud.
+Optimizado con Lazy Loading para evitar colapsos de memoria (Segfault/Oh No) en Streamlit Cloud.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import traceback
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# 1. Configuración estricta de hilos de CPU para evitar throttling/bloqueos
+# 1. Configuración de recursos del sistema (EVITA THROTTLING EN CLOUD)
 # ---------------------------------------------------------------------------
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -22,8 +22,11 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
+import numpy as np
+from PIL import Image
 import streamlit as st
 
+# La configuración de página DEBE ser el primer comando de Streamlit
 st.set_page_config(
     page_title="Segmentación Agrícola",
     page_icon="🌿",
@@ -31,41 +34,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ---------------------------------------------------------------------------
-# 2. Verificación de dependencias necesarias
-# ---------------------------------------------------------------------------
-try:
-    import numpy as np
-    from PIL import Image
-    import sklearn
-    import cv2
-except ImportError as dep_err:
-    st.error("❌ Error de dependencias en el entorno virtual:")
-    st.code(f"Falta el módulo: {dep_err.name}\n\nAgrega '{dep_err.name}' en el archivo requirements.txt de GitHub.")
-    st.stop()
-
+# Ajuste de path para módulos locales
 _APP_DIR = Path(__file__).parent.resolve()
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
-
-try:
-    from core.segmentation import ClassicSegmenter
-    from core.sam_handler import SAMHandler
-    from utils.image_io import (
-        image_from_bytes,
-        image_to_bytes,
-        geotiff_to_bytes,
-    )
-    from utils.visualization import (
-        overlay_masks,
-        colorize_result,
-        draw_points,
-        create_comparison_grid,
-    )
-except Exception as local_import_err:
-    st.error("❌ Error al importar módulos locales:")
-    st.code(traceback.format_exc())
-    st.stop()
 
 APP_TITLE = "🌾 Segmentación de Imágenes Agrícolas"
 APP_ICON = "🌿"
@@ -130,14 +102,22 @@ def _init_state() -> None:
 _init_state()
 
 
+# Carga diferida (Lazy Load) de SAM con Caché
 @st.cache_resource(show_spinner=False)
-def get_segmenter() -> ClassicSegmenter:
-    return ClassicSegmenter()
-
-
-@st.cache_resource(show_spinner=False)
-def get_sam_handler(checkpoint_path: str) -> SAMHandler:
+def get_sam_handler(checkpoint_path: str):
+    import torch
+    try:
+        torch.set_num_threads(1)
+    except Exception:
+        pass
+    from core.sam_handler import SAMHandler
     return SAMHandler(checkpoint_path=checkpoint_path)
+
+
+@st.cache_resource(show_spinner=False)
+def get_segmenter():
+    from core.segmentation import ClassicSegmenter
+    return ClassicSegmenter()
 
 
 def _build_filename(ext: str) -> str:
@@ -147,8 +127,8 @@ def _build_filename(ext: str) -> str:
     return f"{stem}_{mkey}.{ext}"
 
 
-def safe_run_grabcut(segmenter: ClassicSegmenter, image_rgb: np.ndarray, margin_frac: float = 0.1) -> np.ndarray:
-    """Ejecuta GrabCut de forma segura reduciendo la escala si la imagen es grande."""
+def safe_run_grabcut(segmenter, image_rgb: np.ndarray, margin_frac: float = 0.1) -> np.ndarray:
+    import cv2
     h, w = image_rgb.shape[:2]
     max_dim = max(h, w)
     
@@ -180,6 +160,7 @@ with st.sidebar:
     if uploaded is not None:
         file_bytes = uploaded.read()
         try:
+            from utils.image_io import image_from_bytes
             image_rgb, metadata = image_from_bytes(file_bytes, uploaded.name)
             st.session_state["image_rgb"]   = image_rgb
             st.session_state["metadata"]    = metadata
@@ -244,15 +225,9 @@ with st.sidebar:
     if method_key in SAM_METHODS:
         st.markdown("🤖 **Estado de SAM**")
         sam_path = st.text_input("Ruta checkpoint .pth", value=DEFAULT_SAM_CHECKPOINT)
-        handler = get_sam_handler(sam_path)
-        info = handler.status_info()
-
-        if info["model_loaded"]:
-            st.success("✅ Modelo cargado en memoria")
-        elif info["checkpoint_found"] and info["sam_installed"]:
-            st.warning("⏳ Checkpoint encontrado — se cargará al segmentar")
-        elif not info["sam_installed"]:
-            st.error("❌ SAM no instalado")
+        ckpt_exists = Path(sam_path).exists()
+        if ckpt_exists:
+            st.success("✅ Checkpoint detectado en disco")
         else:
             st.info("💡 Coloca el archivo checkpoint .pth para habilitar SAM.")
 
@@ -285,6 +260,7 @@ with tab_seg:
         st.subheader("📷 Imagen original")
 
         if method_key == "sam_click" and st.session_state["click_points"]:
+            from utils.visualization import draw_points
             display_img = draw_points(
                 image_rgb,
                 st.session_state["click_points"],
@@ -337,6 +313,8 @@ with tab_seg:
         if run_btn:
             with st.spinner(f"Procesando con {method_label}…"):
                 try:
+                    from utils.visualization import overlay_masks, colorize_result
+
                     if method_key in SAM_METHODS:
                         handler = get_sam_handler(DEFAULT_SAM_CHECKPOINT)
                         if method_key == "sam_auto":
@@ -371,7 +349,8 @@ with tab_seg:
                         st.session_state["sam_masks"]    = None
 
                 except Exception as exc:
-                    st.error(f"Error durante la segmentación: {exc}")
+                    st.error(f"Error durante la segmentación:")
+                    st.code(traceback.format_exc())
 
         result_rgb: np.ndarray | None = st.session_state["result_rgb"]
 
@@ -380,10 +359,12 @@ with tab_seg:
 
             dl_col1, dl_col2 = st.columns(2)
             with dl_col1:
+                from utils.image_io import image_to_bytes, geotiff_to_bytes
                 png_bytes = image_to_bytes(result_rgb, fmt="png")
                 st.download_button("⬇️ PNG", png_bytes, _build_filename("png"), "image/png", width="stretch")
 
             with dl_col2:
+                from utils.image_io import geotiff_to_bytes
                 has_geo = metadata and metadata.get("crs") is not None
                 tiff_bytes = geotiff_to_bytes(result_rgb, metadata or {})
                 st.download_button("⬇️ GeoTIFF", tiff_bytes, _build_filename("tif"), "image/tiff", width="stretch")
@@ -406,23 +387,28 @@ with tab_compare:
     run_compare = st.button("▶ Ejecutar comparación", type="primary", disabled=len(selected_labels) < 2)
 
     if run_compare and len(selected_labels) >= 2:
-        segmenter_c = get_segmenter()
-        compare_store: dict[str, np.ndarray] = {}
-
         with st.spinner("Procesando comparación…"):
-            for label in selected_labels:
-                mkey = COMPARE_METHOD_MAP[label]
-                if mkey == "original":
-                    compare_store[label] = image_rgb_c.copy()
-                elif mkey == "grabcut":
-                    raw = safe_run_grabcut(segmenter_c, image_rgb_c)
-                    compare_store[label] = colorize_result(raw, mkey)
-                else:
-                    raw = segmenter_c.run(mkey, image_rgb_c)
-                    compare_store[label] = colorize_result(raw, mkey)
+            try:
+                from utils.visualization import colorize_result, create_comparison_grid
+                segmenter_c = get_segmenter()
+                compare_store: dict[str, np.ndarray] = {}
 
-        ordered_imgs   = [compare_store[lbl] for lbl in selected_labels if lbl in compare_store]
-        ordered_titles = [lbl for lbl in selected_labels if lbl in compare_store]
+                for label in selected_labels:
+                    mkey = COMPARE_METHOD_MAP[label]
+                    if mkey == "original":
+                        compare_store[label] = image_rgb_c.copy()
+                    elif mkey == "grabcut":
+                        raw = safe_run_grabcut(segmenter_c, image_rgb_c)
+                        compare_store[label] = colorize_result(raw, mkey)
+                    else:
+                        raw = segmenter_c.run(mkey, image_rgb_c)
+                        compare_store[label] = colorize_result(raw, mkey)
 
-        grid = create_comparison_grid(ordered_imgs, ordered_titles, cols=min(2, len(ordered_imgs)))
-        st.image(grid, width="stretch", caption="Grid comparativo")
+                ordered_imgs   = [compare_store[lbl] for lbl in selected_labels if lbl in compare_store]
+                ordered_titles = [lbl for lbl in selected_labels if lbl in compare_store]
+
+                grid = create_comparison_grid(ordered_imgs, ordered_titles, cols=min(2, len(ordered_imgs)))
+                st.image(grid, width="stretch", caption="Grid comparativo")
+            except Exception as comp_err:
+                st.error("Error durante la comparación:")
+                st.code(traceback.format_exc())
