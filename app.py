@@ -10,11 +10,10 @@ Ejecutar:
 
 from __future__ import annotations
 
-import concurrent.futures
-import io
 import os
 import sys
 import threading as _threading
+import traceback
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -26,9 +25,27 @@ os.environ["OPENBLAS_NUM_THREADS"] = "2"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
 os.environ["NUMEXPR_NUM_THREADS"] = "2"
 
-import numpy as np
 import streamlit as st
-from PIL import Image
+
+# Configuración de la página
+st.set_page_config(
+    page_title="Segmentación Agrícola",
+    page_icon="🌿",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ---------------------------------------------------------------------------
+# Verificación de dependencias necesarias
+# ---------------------------------------------------------------------------
+try:
+    import numpy as np
+    from PIL import Image
+    import sklearn
+except ImportError as dep_err:
+    st.error("❌ Error de dependencias en el entorno virtual:")
+    st.code(f"Falta el módulo: {dep_err.name}\n\nAgrega '{dep_err.name}' en el archivo requirements.txt de GitHub.")
+    st.stop()
 
 # Configuración del path local
 _APP_DIR = Path(__file__).parent.resolve()
@@ -36,19 +53,24 @@ if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
 # Importaciones locales
-from core.segmentation import ClassicSegmenter
-from core.sam_handler import SAMHandler
-from utils.image_io import (
-    image_from_bytes,
-    image_to_bytes,
-    geotiff_to_bytes,
-)
-from utils.visualization import (
-    overlay_masks,
-    colorize_result,
-    draw_points,
-    create_comparison_grid,
-)
+try:
+    from core.segmentation import ClassicSegmenter
+    from core.sam_handler import SAMHandler
+    from utils.image_io import (
+        image_from_bytes,
+        image_to_bytes,
+        geotiff_to_bytes,
+    )
+    from utils.visualization import (
+        overlay_masks,
+        colorize_result,
+        draw_points,
+        create_comparison_grid,
+    )
+except Exception as local_import_err:
+    st.error("❌ Error al importar módulos locales:")
+    st.code(traceback.format_exc())
+    st.stop()
 
 # ---------------------------------------------------------------------------
 # Constantes de la interfaz
@@ -89,8 +111,6 @@ DEFAULT_SAM_CHECKPOINT = str(_SAM_CHECKPOINT_DIR / _SAM_FILENAME)
 
 def _ensure_sam_checkpoint():
     """Descarga el checkpoint SAM ViT-L si no existe en disco."""
-    import traceback
-
     checkpoint_path = Path(DEFAULT_SAM_CHECKPOINT)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -162,19 +182,9 @@ COMPARE_METHOD_MAP: dict[str, str] = {
     "8 · SAM – Automático":"sam_auto",
 }
 
-# ---------------------------------------------------------------------------
-# Configuración Streamlit
-# ---------------------------------------------------------------------------
-
-st.set_page_config(
-    page_title="Segmentación Agrícola",
-    page_icon=APP_ICON,
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
 
 # ---------------------------------------------------------------------------
-# Inicialización de Estado y Fondo
+# Inicialización de Estado
 # ---------------------------------------------------------------------------
 
 def _init_state() -> None:
@@ -207,10 +217,11 @@ if "sam_download_started" not in st.session_state:
 
 _resolved_sam_path = DEFAULT_SAM_CHECKPOINT
 
-# Caches optimizados
+
 @st.cache_resource(show_spinner=False)
 def get_segmenter() -> ClassicSegmenter:
     return ClassicSegmenter()
+
 
 @st.cache_resource(show_spinner=False)
 def get_sam_handler(checkpoint_path: str) -> SAMHandler:
@@ -440,7 +451,7 @@ with tab_seg:
             dl_col1, dl_col2 = st.columns(2)
             with dl_col1:
                 png_bytes = image_to_bytes(result_rgb, fmt="png")
-                st.download_button("⬇️ PNG", png_bytes, _build_filename("png"), "image/png", width="stretch")
+                st.download_button("⬇️️ PNG", png_bytes, _build_filename("png"), "image/png", width="stretch")
 
             with dl_col2:
                 has_geo = metadata and metadata.get("crs") is not None

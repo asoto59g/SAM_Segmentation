@@ -1,9 +1,13 @@
 ﻿--extra-index-url https://download.pytorch.org/whl/cpu
 torch>=2.0.0
 torchvision
-segment-anything
+segment-anything @ git+https://github.com/facebookresearch/segment-anything.git
 scikit-image
+scikit-learn
 opencv-python-headless
 pillow
 numpy<2.0.0
 streamlit
+streamlit-image-coordinates
+gdown
+rasterio
