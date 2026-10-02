@@ -3,7 +3,7 @@ app.py
 ------
 App web de segmentación de imágenes agrícolas / satelitales.
 Construida con Streamlit + PyTorch + SAM.
-Optimizado con Lazy Loading para evitar colapsos de memoria (Segfault/Oh No) en Streamlit Cloud.
+Diseñado con protección de importación para evitar fallos de compilación en Streamlit Cloud.
 """
 
 from __future__ import annotations
@@ -13,20 +13,16 @@ import sys
 import traceback
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# 1. Configuración de recursos del sistema (EVITA THROTTLING EN CLOUD)
-# ---------------------------------------------------------------------------
+# 1. Ajuste estricto de variables de entorno para hilos CPU antes de cualquier cálculo
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-import numpy as np
-from PIL import Image
 import streamlit as st
 
-# La configuración de página DEBE ser el primer comando de Streamlit
+# La configuración de página DEBE ser la primera instrucción de Streamlit
 st.set_page_config(
     page_title="Segmentación Agrícola",
     page_icon="🌿",
@@ -38,6 +34,17 @@ st.set_page_config(
 _APP_DIR = Path(__file__).parent.resolve()
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
+
+# ---------------------------------------------------------------------------
+# Verificación e importación segura de librerías esenciales
+# ---------------------------------------------------------------------------
+try:
+    import numpy as np
+    from PIL import Image
+except Exception as init_err:
+    st.error("❌ Fallo crítico al iniciar las librerías base:")
+    st.code(traceback.format_exc())
+    st.stop()
 
 APP_TITLE = "🌾 Segmentación de Imágenes Agrícolas"
 APP_ICON = "🌿"
@@ -349,7 +356,7 @@ with tab_seg:
                         st.session_state["sam_masks"]    = None
 
                 except Exception as exc:
-                    st.error(f"Error durante la segmentación:")
+                    st.error("Error durante la segmentación:")
                     st.code(traceback.format_exc())
 
         result_rgb: np.ndarray | None = st.session_state["result_rgb"]
@@ -359,7 +366,7 @@ with tab_seg:
 
             dl_col1, dl_col2 = st.columns(2)
             with dl_col1:
-                from utils.image_io import image_to_bytes, geotiff_to_bytes
+                from utils.image_io import image_to_bytes
                 png_bytes = image_to_bytes(result_rgb, fmt="png")
                 st.download_button("⬇️ PNG", png_bytes, _build_filename("png"), "image/png", width="stretch")
 
