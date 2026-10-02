@@ -1,8 +1,9 @@
 """
-core/sam_handler.py
--------------------
+app.py / core/sam_handler.py
+----------------------------
 Manejo de la inferencia y carga de modelos Segment Anything (SAM).
-Optimizado con torch.no_grad() y control de hilos de CPU para evitar throttling en Streamlit Cloud.
+Optimizado con torch.no_grad(), caché de Streamlit y control de hilos de CPU
+para evitar throttling en Streamlit Cloud.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import os
 from pathlib import Path
 import numpy as np
 import torch
+import streamlit as st
 
 # 1. Configurar variables de entorno antes de cualquier cálculo para controlar librerías C/C++
 os.environ["OMP_NUM_THREADS"] = "2"
@@ -89,7 +91,7 @@ class SAMHandler:
     def auto_segment(
         self,
         image_rgb: np.ndarray,
-        points_per_side: int = 8,  # Ajustado a 8 para minimizar consumo de CPU
+        points_per_side: int = 8,  # Ajustado a 8 para minimizar uso de CPU
         pred_iou_thresh: float = 0.88,
         min_mask_region_area: int = 500,
     ) -> tuple[list[dict] | None, str | None]:
@@ -144,3 +146,13 @@ class SAMHandler:
             return formatted_masks, None
         except Exception as exc:
             return None, f"Error durante segmentación por puntos: {exc}"
+
+
+# 3. Función en caché para instanciar el Handler y evitar recargas al reejecutar el script
+@st.cache_resource
+def get_sam_handler(checkpoint_path: str, model_type: str = "vit_b") -> SAMHandler:
+    handler = SAMHandler(checkpoint_path=checkpoint_path, model_type=model_type)
+    err = handler._load_model()
+    if err:
+        st.error(f"Error al inicializar SAM: {err}")
+    return handler
