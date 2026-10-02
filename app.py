@@ -12,11 +12,14 @@ import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Forzar la raíz del proyecto en sys.path para Streamlit Cloud
+# Configuración estricta de rutas para Streamlit Cloud
 # ---------------------------------------------------------------------------
 _APP_DIR = Path(__file__).resolve().parent
-if str(_APP_DIR) not in sys.path:
-    sys.path.insert(0, str(_APP_DIR))
+_CWD = Path.cwd().resolve()
+
+for _path in [_APP_DIR, _CWD]:
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 import concurrent.futures
 import urllib.request
@@ -24,20 +27,26 @@ import numpy as np
 import streamlit as st
 from PIL import Image
 
-# Importaciones de módulos locales (deben ir después de ajustar sys.path)
-from core.segmentation import ClassicSegmenter
-from core.sam_handler import SAMHandler
-from utils.image_io import (
-    image_from_bytes,
-    image_to_bytes,
-    geotiff_to_bytes,
-)
-from utils.visualization import (
-    overlay_masks,
-    colorize_result,
-    draw_points,
-    create_comparison_grid,
-)
+# Importaciones de módulos locales
+try:
+    from core.segmentation import ClassicSegmenter
+    from core.sam_handler import SAMHandler
+    from utils.image_io import (
+        image_from_bytes,
+        image_to_bytes,
+        geotiff_to_bytes,
+    )
+    from utils.visualization import (
+        overlay_masks,
+        colorize_result,
+        draw_points,
+        create_comparison_grid,
+    )
+except ModuleNotFoundError as err:
+    st.error(f"Error de módulos locales: {err}")
+    st.info(f"Directorio actual: {_APP_DIR}")
+    st.info(f"Contenido del directorio: {os.listdir(_APP_DIR)}")
+    st.stop()
 
 # ---------------------------------------------------------------------------
 # Constantes de la interfaz y modelos
@@ -46,12 +55,11 @@ from utils.visualization import (
 APP_TITLE = "🌾 Segmentación de Imágenes Agrícolas"
 APP_ICON = "🌿"
 
-# Usar SAM ViT-B (~375 MB) por defecto para evitar agotamiento de RAM en Streamlit Cloud
+# Modelo ViT-B (~375 MB) para evitar sobrepasar límites de RAM en Streamlit Cloud
 _SAM_OFFICIAL_URL = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
 _SAM_FILENAME = "sam_vit_b_01ec64.pth"
 
 def _dir_is_writable(path: Path) -> bool:
-    """Prueba si el directorio permite escritura en el sistema de archivos actual."""
     try:
         path.mkdir(parents=True, exist_ok=True)
         test = path / ".write_test"
@@ -74,10 +82,6 @@ DEFAULT_SAM_CHECKPOINT = str(_SAM_CHECKPOINT_DIR / _SAM_FILENAME)
 # ---------------------------------------------------------------------------
 
 def _ensure_sam_checkpoint(checkpoint_path_str: str) -> bool:
-    """
-    Verifica o descarga el checkpoint de SAM desde la fuente oficial.
-    Retorna True si el archivo existe y es válido.
-    """
     checkpoint_path = Path(checkpoint_path_str)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -92,7 +96,6 @@ def _ensure_sam_checkpoint(checkpoint_path_str: str) -> bool:
         st.error(f"Error al descargar el modelo: {exc}")
         return False
 
-# Mapeo de métodos
 METHOD_LABELS: dict[str, str] = {
     "1 · Otsu (Umbralización)":       "otsu",
     "2 · Canny (Bordes)":             "canny",
@@ -169,7 +172,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Inicialización de estado de sesión
+# Estado de sesión
 # ---------------------------------------------------------------------------
 
 def _init_state() -> None:
@@ -191,7 +194,7 @@ def _init_state() -> None:
 _init_state()
 
 # ---------------------------------------------------------------------------
-# Carga de recursos en caché
+# Recursos en caché
 # ---------------------------------------------------------------------------
 
 @st.cache_resource(show_spinner=False)
