@@ -2,32 +2,28 @@
 app.py
 ------
 App web de segmentación de imágenes agrícolas / satelitales.
-Construida con Streamlit + PyTorch + SAM ViT-L.
-
-Ejecutar:
-    streamlit run app.py
+Construida con Streamlit + PyTorch + SAM.
+Optimizado contra Segfaults en GrabCut y throttling de CPU en Streamlit Cloud.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import threading as _threading
 import traceback
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# 1. Configuración de recursos del sistema (EVITA THROTTLING DE CPU EN CLOUD)
+# 1. Configuración estricta de hilos de CPU para evitar throttling/bloqueos
 # ---------------------------------------------------------------------------
-os.environ["OMP_NUM_THREADS"] = "2"
-os.environ["MKL_NUM_THREADS"] = "2"
-os.environ["OPENBLAS_NUM_THREADS"] = "2"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
-os.environ["NUMEXPR_NUM_THREADS"] = "2"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import streamlit as st
 
-# Configuración de la página
 st.set_page_config(
     page_title="Segmentación Agrícola",
     page_icon="🌿",
@@ -36,23 +32,22 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Verificación de dependencias necesarias
+# 2. Verificación de dependencias necesarias
 # ---------------------------------------------------------------------------
 try:
     import numpy as np
     from PIL import Image
     import sklearn
+    import cv2
 except ImportError as dep_err:
     st.error("❌ Error de dependencias en el entorno virtual:")
     st.code(f"Falta el módulo: {dep_err.name}\n\nAgrega '{dep_err.name}' en el archivo requirements.txt de GitHub.")
     st.stop()
 
-# Configuración del path local
 _APP_DIR = Path(__file__).parent.resolve()
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
-# Importaciones locales
 try:
     from core.segmentation import ClassicSegmenter
     from core.sam_handler import SAMHandler
@@ -72,78 +67,13 @@ except Exception as local_import_err:
     st.code(traceback.format_exc())
     st.stop()
 
-# ---------------------------------------------------------------------------
-# Constantes de la interfaz
-# ---------------------------------------------------------------------------
-
 APP_TITLE = "🌾 Segmentación de Imágenes Agrícolas"
 APP_ICON = "🌿"
-
-# Google Drive file ID del checkpoint SAM ViT-L
-_SAM_GDRIVE_FILE_ID = "1Uj9-Shntka1a3k4e49ZFbHHwDV_dC2_d"
-_SAM_FILENAME = "sam_vit_l_0b3195.pth"
-
-
-def _dir_is_writable(path: Path) -> bool:
-    """Prueba escritura real creando y borrando un archivo temporal."""
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        test = path / ".write_test"
-        test.write_text("x")
-        test.unlink()
-        return True
-    except Exception:
-        return False
-
-
-_LOCAL_MODELS_DIR = _APP_DIR / "models"
-if _dir_is_writable(_LOCAL_MODELS_DIR):
-    _SAM_CHECKPOINT_DIR = _LOCAL_MODELS_DIR
-else:
-    _SAM_CHECKPOINT_DIR = Path("/tmp/sam_models")
-
-DEFAULT_SAM_CHECKPOINT = str(_SAM_CHECKPOINT_DIR / _SAM_FILENAME)
-
+DEFAULT_SAM_CHECKPOINT = str(Path("/tmp/sam_models") / "sam_vit_b.pth")
 
 # ---------------------------------------------------------------------------
-# Descarga automática del checkpoint SAM desde Google Drive
+# Mapeos de Métodos
 # ---------------------------------------------------------------------------
-
-def _ensure_sam_checkpoint():
-    """Descarga el checkpoint SAM ViT-L si no existe en disco."""
-    checkpoint_path = Path(DEFAULT_SAM_CHECKPOINT)
-    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if checkpoint_path.exists() and checkpoint_path.stat().st_size > 100_000_000:
-        st.session_state["sam_download_error"] = None
-        return str(checkpoint_path)
-
-    st.session_state["sam_download_error"] = None
-
-    try:
-        import gdown
-        url = f"https://drive.google.com/uc?id={_SAM_GDRIVE_FILE_ID}"
-        result = gdown.download(url, str(checkpoint_path), quiet=False, fuzzy=True)
-
-        if result is None:
-            st.session_state["sam_download_error"] = (
-                "gdown retornó None. Asegúrate de que el enlace de Drive sea público."
-            )
-        elif checkpoint_path.exists() and checkpoint_path.stat().st_size < 100_000_000:
-            mb = checkpoint_path.stat().st_size // 1024 // 1024
-            st.session_state["sam_download_error"] = (
-                f"Descarga incompleta: {mb} MB obtenidos (se esperan ~1200 MB)."
-            )
-
-    except Exception:
-        st.session_state["sam_download_error"] = (
-            f"Error en descarga:\n{traceback.format_exc()}"
-        )
-
-    return str(checkpoint_path)
-
-
-# Mapeo de métodos
 METHOD_LABELS: dict[str, str] = {
     "1 · Otsu (Umbralización)":       "otsu",
     "2 · Canny (Bordes)":             "canny",
@@ -167,7 +97,6 @@ COMPARE_OPTIONS: list[str] = [
     "5 · K-Means",
     "6 · Mean-Shift",
     "7 · GrabCut",
-    "8 · SAM – Automático",
 ]
 
 COMPARE_METHOD_MAP: dict[str, str] = {
@@ -179,13 +108,8 @@ COMPARE_METHOD_MAP: dict[str, str] = {
     "5 · K-Means":         "kmeans",
     "6 · Mean-Shift":      "meanshift",
     "7 · GrabCut":         "grabcut",
-    "8 · SAM – Automático":"sam_auto",
 }
 
-
-# ---------------------------------------------------------------------------
-# Inicialización de Estado
-# ---------------------------------------------------------------------------
 
 def _init_state() -> None:
     defaults = {
@@ -198,24 +122,12 @@ def _init_state() -> None:
         "click_points":    [],
         "click_labels":    [],
         "compare_results": {},
-        "sam_download_error": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
 
 _init_state()
-
-# Hilo en background para descarga de SAM
-def _background_download():
-    _ensure_sam_checkpoint()
-
-if "sam_download_started" not in st.session_state:
-    st.session_state["sam_download_started"] = True
-    _t = _threading.Thread(target=_background_download, daemon=True)
-    _t.start()
-
-_resolved_sam_path = DEFAULT_SAM_CHECKPOINT
 
 
 @st.cache_resource(show_spinner=False)
@@ -235,10 +147,25 @@ def _build_filename(ext: str) -> str:
     return f"{stem}_{mkey}.{ext}"
 
 
+def safe_run_grabcut(segmenter: ClassicSegmenter, image_rgb: np.ndarray, margin_frac: float = 0.1) -> np.ndarray:
+    """Ejecuta GrabCut de forma segura reduciendo la escala si la imagen es grande."""
+    h, w = image_rgb.shape[:2]
+    max_dim = max(h, w)
+    
+    if max_dim > 800:
+        scale = 800.0 / max_dim
+        new_w, new_h = int(w * scale), int(h * scale)
+        small_img = cv2.resize(image_rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        mask_small = segmenter.run("grabcut", small_img, margin_frac=margin_frac)
+        mask_full = cv2.resize(mask_small.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+        return mask_full
+    else:
+        return segmenter.run("grabcut", image_rgb, margin_frac=margin_frac)
+
+
 # ---------------------------------------------------------------------------
 # INTERFAZ - SIDEBAR
 # ---------------------------------------------------------------------------
-
 with st.sidebar:
     st.markdown(f"## {APP_TITLE}")
     st.markdown("---")
@@ -310,13 +237,13 @@ with st.sidebar:
         params["margin_frac"] = st.slider("Margen (%)", 5, 30, 10) / 100.0
 
     elif method_key == "sam_auto":
-        params["points_per_side"] = st.slider("Puntos por lado (grilla)", 4, 24, 8)
+        params["points_per_side"] = st.slider("Puntos por lado (grilla)", 4, 16, 8)
         params["pred_iou_thresh"] = st.slider("Umbral IoU mínimo", 0.70, 0.98, 0.88, step=0.01)
         params["min_mask_region_area"] = st.slider("Área mínima (px²)", 100, 5000, 500, step=100)
 
     if method_key in SAM_METHODS:
         st.markdown("🤖 **Estado de SAM**")
-        sam_path = st.text_input("Ruta checkpoint .pth", value=_resolved_sam_path)
+        sam_path = st.text_input("Ruta checkpoint .pth", value=DEFAULT_SAM_CHECKPOINT)
         handler = get_sam_handler(sam_path)
         info = handler.status_info()
 
@@ -327,7 +254,7 @@ with st.sidebar:
         elif not info["sam_installed"]:
             st.error("❌ SAM no instalado")
         else:
-            st.info("⏬ Descargando checkpoint SAM desde Google Drive...")
+            st.info("💡 Coloca el archivo checkpoint .pth para habilitar SAM.")
 
     st.markdown("---")
     st.caption("ABC Geomática Agrícola SRL · 2026")
@@ -336,7 +263,6 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # INTERFAZ PRINCIPAL
 # ---------------------------------------------------------------------------
-
 st.title(APP_TITLE)
 st.markdown("Segmentación interactiva de imágenes agrícolas y satelitales.")
 
@@ -412,7 +338,7 @@ with tab_seg:
             with st.spinner(f"Procesando con {method_label}…"):
                 try:
                     if method_key in SAM_METHODS:
-                        handler = get_sam_handler(_resolved_sam_path)
+                        handler = get_sam_handler(DEFAULT_SAM_CHECKPOINT)
                         if method_key == "sam_auto":
                             masks, err = handler.auto_segment(
                                 image_rgb,
@@ -435,7 +361,11 @@ with tab_seg:
                             st.session_state["result_method"] = method_key
                     else:
                         segmenter = get_segmenter()
-                        result_raw = segmenter.run(method_key, image_rgb, **params)
+                        if method_key == "grabcut":
+                            result_raw = safe_run_grabcut(segmenter, image_rgb, margin_frac=params.get("margin_frac", 0.1))
+                        else:
+                            result_raw = segmenter.run(method_key, image_rgb, **params)
+
                         st.session_state["result_rgb"]   = colorize_result(result_raw, method_key)
                         st.session_state["result_method"] = method_key
                         st.session_state["sam_masks"]    = None
@@ -451,7 +381,7 @@ with tab_seg:
             dl_col1, dl_col2 = st.columns(2)
             with dl_col1:
                 png_bytes = image_to_bytes(result_rgb, fmt="png")
-                st.download_button("⬇️️ PNG", png_bytes, _build_filename("png"), "image/png", width="stretch")
+                st.download_button("⬇️ PNG", png_bytes, _build_filename("png"), "image/png", width="stretch")
 
             with dl_col2:
                 has_geo = metadata and metadata.get("crs") is not None
@@ -484,13 +414,9 @@ with tab_compare:
                 mkey = COMPARE_METHOD_MAP[label]
                 if mkey == "original":
                     compare_store[label] = image_rgb_c.copy()
-                elif mkey == "sam_auto":
-                    handler_c = get_sam_handler(_resolved_sam_path)
-                    masks_c, err_c = handler_c.auto_segment(image_rgb_c, points_per_side=8)
-                    if masks_c:
-                        compare_store[label] = overlay_masks(image_rgb_c, masks_c)
-                    else:
-                        compare_store[label] = image_rgb_c.copy()
+                elif mkey == "grabcut":
+                    raw = safe_run_grabcut(segmenter_c, image_rgb_c)
+                    compare_store[label] = colorize_result(raw, mkey)
                 else:
                     raw = segmenter_c.run(mkey, image_rgb_c)
                     compare_store[label] = colorize_result(raw, mkey)
