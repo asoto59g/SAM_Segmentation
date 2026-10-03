@@ -3,18 +3,6 @@ core/segmentation.py
 ---------------------
 7 métodos clásicos de segmentación de imágenes refactorizados como
 una clase unificada orientada a imágenes agrícolas / satelitales.
-
-Métodos disponibles
--------------------
-- otsu          : Umbralización automática (Otsu)
-- canny         : Detección de bordes (Canny)
-- region_growing: Crecimiento de regiones
-- watershed     : Segmentación Watershed
-- kmeans        : Clustering K-Means por color
-- meanshift     : Filtrado Mean-Shift (OpenCV pyrMeanShiftFiltering)
-- grabcut       : Separación fondo / primer plano (GrabCut)
-
-Todos los métodos reciben y devuelven arrays NumPy uint8 (H, W, 3) RGB.
 """
 
 from __future__ import annotations
@@ -26,21 +14,11 @@ import numpy as np
 from sklearn.cluster import KMeans
 
 
-# ---------------------------------------------------------------------------
-# Clase principal
-# ---------------------------------------------------------------------------
-
 class ClassicSegmenter:
     """
     Encapsula los 7 métodos clásicos de segmentación.
-
-    Uso básico
-    ----------
-    >>> segmenter = ClassicSegmenter()
-    >>> result = segmenter.run("kmeans", image_rgb, k=5)
     """
 
-    # Mapa nombre → método interno
     _METHODS: dict[str, str] = {
         "otsu":           "_otsu",
         "canny":          "_canny",
@@ -57,28 +35,6 @@ class ClassicSegmenter:
         image_rgb: np.ndarray,
         **params: Any,
     ) -> np.ndarray:
-        """
-        Ejecuta el método de segmentación indicado.
-
-        Parameters
-        ----------
-        method_name : str
-            Nombre del método (ver ``ClassicSegmenter._METHODS``).
-        image_rgb : np.ndarray
-            Imagen de entrada uint8 (H, W, 3) en orden RGB.
-        **params : Any
-            Parámetros específicos de cada método.
-
-        Returns
-        -------
-        np.ndarray
-            Resultado uint8 (H, W, 3) RGB.
-
-        Raises
-        ------
-        ValueError
-            Si el nombre de método no está registrado.
-        """
         key = method_name.lower().strip()
         if key not in self._METHODS:
             available = ", ".join(self._METHODS)
@@ -93,16 +49,10 @@ class ClassicSegmenter:
 
     @staticmethod
     def available_methods() -> list[str]:
-        """Retorna la lista de nombres de métodos disponibles."""
         return list(ClassicSegmenter._METHODS.keys())
-
-    # ------------------------------------------------------------------
-    # Validación interna
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _validate(image_rgb: np.ndarray) -> np.ndarray:
-        """Asegura que la imagen sea uint8 (H, W, 3)."""
         if image_rgb.ndim == 2:
             image_rgb = np.stack([image_rgb] * 3, axis=-1)
         if image_rgb.shape[2] > 3:
@@ -120,77 +70,62 @@ class ClassicSegmenter:
     # ------------------------------------------------------------------
     # 1. OTSU — Umbralización
     # ------------------------------------------------------------------
-
     def _otsu(
         self,
         image_rgb: np.ndarray,
         blur_kernel: int = 5,
+        **kwargs
     ) -> np.ndarray:
-        """
-        Umbralización automática de Otsu.
-
-        Parameters
-        ----------
-        blur_kernel : int
-            Tamaño del kernel Gaussiano de suavizado (impar ≥ 1).
-        """
         gray = self._to_gray(image_rgb)
-
         k = blur_kernel if blur_kernel % 2 == 1 else blur_kernel + 1
         blurred = cv2.GaussianBlur(gray, (k, k), 0)
 
-        _thresh, binary = cv2.threshold(
+        _, binary = cv2.threshold(
             blurred, 0, 255,
             cv2.THRESH_BINARY + cv2.THRESH_OTSU,
         )
         return self._gray_to_rgb(binary)
 
     # ------------------------------------------------------------------
-    # 2. CANNY — Detección de bordes
+    # 2. CANNY — Detección de bordes (Compatible con sigma y **kwargs)
     # ------------------------------------------------------------------
-
     def _canny(
         self,
         image_rgb: np.ndarray,
-        low_threshold: int = 100,
-        high_threshold: int = 200,
+        sigma: float = 1.0,
+        low_threshold: int | None = None,
+        high_threshold: int | None = None,
+        **kwargs
     ) -> np.ndarray:
-        """
-        Detección de bordes de Canny.
-
-        Parameters
-        ----------
-        low_threshold : int
-            Umbral bajo para histéresis.
-        high_threshold : int
-            Umbral alto para histéresis.
-        """
         gray = self._to_gray(image_rgb)
-        edges = cv2.Canny(gray, low_threshold, high_threshold)
+        blurred = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma)
+        
+        if low_threshold is None or high_threshold is None:
+            v = np.median(blurred)
+            lower = int(max(0, (1.0 - 0.33) * v))
+            upper = int(min(255, (1.0 + 0.33) * v))
+        else:
+            lower = low_threshold
+            upper = high_threshold
+            
+        edges = cv2.Canny(blurred, lower, upper)
         return self._gray_to_rgb(edges)
 
     # ------------------------------------------------------------------
     # 3. REGION GROWING — Crecimiento de regiones
     # ------------------------------------------------------------------
-
     def _region_growing(
         self,
         image_rgb: np.ndarray,
         seed: tuple[int, int] | None = None,
         tolerance: float = 15.0,
+        **kwargs
     ) -> np.ndarray:
-        """
-        Crecimiento de regiones desde una semilla.
-
-        Parameters
-        ----------
-        seed : tuple[int, int] | None
-            Punto inicial (col, row). Si es None, usa el centro.
-        tolerance : float
-            Máxima diferencia de intensidad aceptada para agregar un píxel.
-        """
         gray = self._to_gray(image_rgb)
         h, w = gray.shape
+
+        if tolerance <= 1.0:
+            tolerance = tolerance * 255.0
 
         if seed is None:
             seed = (w // 2, h // 2)
@@ -239,15 +174,12 @@ class ClassicSegmenter:
     # ------------------------------------------------------------------
     # 4. WATERSHED
     # ------------------------------------------------------------------
-
     def _watershed(
         self,
         image_rgb: np.ndarray,
+        compactness: float = 0.01,
+        **kwargs
     ) -> np.ndarray:
-        """
-        Segmentación Watershed con marcadores derivados de la
-        transformada de distancia.
-        """
         gray = self._to_gray(image_rgb)
 
         _, binary = cv2.threshold(
@@ -261,7 +193,8 @@ class ClassicSegmenter:
         sure_bg = cv2.dilate(opening, kernel, iterations=3)
 
         dist = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist, 0.5 * dist.max(), 255, 0)
+        thresh_val = np.clip(0.5 + (compactness * 5), 0.1, 0.9)
+        _, sure_fg = cv2.threshold(dist, thresh_val * dist.max(), 255, 0)
         sure_fg = sure_fg.astype(np.uint8)
 
         unknown = cv2.subtract(sure_bg, sure_fg)
@@ -274,30 +207,20 @@ class ClassicSegmenter:
         markers = cv2.watershed(bgr, markers)
 
         result = image_rgb.copy()
-        result[markers == -1] = [255, 0, 0]  # fronteras en rojo
+        result[markers == -1] = [255, 0, 0]
         return result
 
     # ------------------------------------------------------------------
     # 5. K-MEANS
     # ------------------------------------------------------------------
-
     def _kmeans(
         self,
         image_rgb: np.ndarray,
-        k: int = 4,
+        n_clusters: int = 4,
         random_state: int = 42,
+        **kwargs
     ) -> np.ndarray:
-        """
-        Segmentación por clustering K-Means sobre color RGB.
-
-        Parameters
-        ----------
-        k : int
-            Número de clusters (2 ≤ k ≤ 16).
-        random_state : int
-            Semilla para reproducibilidad.
-        """
-        k = int(np.clip(k, 2, 16))
+        k = int(np.clip(n_clusters, 2, 20))
         pixels = image_rgb.reshape(-1, 3).astype(np.float32)
 
         model = KMeans(
@@ -314,50 +237,27 @@ class ClassicSegmenter:
     # ------------------------------------------------------------------
     # 6. MEAN-SHIFT
     # ------------------------------------------------------------------
-
     def _meanshift(
         self,
         image_rgb: np.ndarray,
-        sp: int = 15,
-        sr: int = 30,
+        spatial_radius: int = 15,
+        color_radius: int = 30,
+        **kwargs
     ) -> np.ndarray:
-        """
-        Segmentación Mean-Shift con ``cv2.pyrMeanShiftFiltering``.
-
-        Parameters
-        ----------
-        sp : int
-            Tamaño espacial de la ventana (radio en píxeles).
-        sr : int
-            Radio de búsqueda de color (rango de color).
-        """
-        # pyrMeanShiftFiltering opera en BGR
         bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
-        filtered = cv2.pyrMeanShiftFiltering(bgr, sp=sp, sr=sr)
+        filtered = cv2.pyrMeanShiftFiltering(bgr, sp=spatial_radius, sr=color_radius)
         return cv2.cvtColor(filtered, cv2.COLOR_BGR2RGB)
 
     # ------------------------------------------------------------------
     # 7. GRABCUT
     # ------------------------------------------------------------------
-
     def _grabcut(
         self,
         image_rgb: np.ndarray,
         margin_frac: float = 0.10,
-        iterations: int = 5,
+        iterCount: int = 5,
+        **kwargs
     ) -> np.ndarray:
-        """
-        Separación fondo / primer plano con GrabCut.
-
-        Un rectángulo automático ocupa el (1 - 2·margin_frac) de la imagen.
-
-        Parameters
-        ----------
-        margin_frac : float
-            Fracción de margen respecto al ancho/alto total (0.05 – 0.30).
-        iterations : int
-            Número de iteraciones del algoritmo GrabCut.
-        """
         h, w = image_rgb.shape[:2]
 
         margin_x = max(5, int(w * margin_frac))
@@ -378,12 +278,10 @@ class ClassicSegmenter:
         cv2.grabCut(
             bgr, mask, rect,
             bg_model, fg_model,
-            iterations,
+            iterCount,
             cv2.GC_INIT_WITH_RECT,
         )
 
-        # 0 y 2 = fondo definitivo / probable fondo → negro
-        # 1 y 3 = primer plano definitivo / probable → conservar
         binary_mask = np.where(
             (mask == cv2.GC_BGD) | (mask == cv2.GC_PR_BGD),
             0, 255,
