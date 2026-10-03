@@ -4,25 +4,26 @@ app.py
 App web de segmentación de imágenes agrícolas / satelitales.
 Construida con Streamlit + PyTorch + SAM.
 Soporta descarga automática de modelos SAM (ViT-B, ViT-L, ViT-H) en entorno local y nube,
-así como el ajuste interactivo de todos sus parámetros.
+así como el ajuste interactivo de todos sus parámetros con protección de memoria RAM.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import gc
 import urllib.request
 import traceback
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# 1. Configuración de recursos del sistema (EVITA THROTTLING EN CLOUD)
+# 1. Configuración de recursos del sistema (EVITA THROTTLING EN CLOUD / CPU)
 # ---------------------------------------------------------------------------
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
+os.environ["NUMEXPR_NUM_THREADS"] = "2"
 
 import numpy as np
 from PIL import Image
@@ -200,7 +201,7 @@ _init_state()
 def load_sam_handler_instance(checkpoint_path: str, model_type: str):
     import torch
     try:
-        torch.set_num_threads(1)
+        torch.set_num_threads(2)
     except Exception:
         pass
     from core.sam_handler import SAMHandler
@@ -215,6 +216,7 @@ def get_sam_handler(checkpoint_path: str):
     model_type = get_model_type_from_filename(checkpoint_path)
     
     if st.session_state.get("loaded_sam_path") != checkpoint_path:
+        gc.collect()
         load_sam_handler_instance.clear()
         st.session_state["loaded_sam_path"] = checkpoint_path
         
@@ -327,8 +329,8 @@ with st.sidebar:
     elif method_key == "sam_auto":
         st.caption("Ajustes de sensibilidad de detección:")
         params["points_per_side"] = st.slider(
-            "Puntos por lado (Grilla)", 8, 64, 32, step=8,
-            help="Mayor valor detecta objetos más pequeños y detalles finos."
+            "Puntos por lado (Grilla)", 8, 64, 16, step=8,
+            help="16 o 24 es ideal para CPU. 32 o más exige alta GPU."
         )
         params["pred_iou_thresh"] = st.slider(
             "Umbral IoU mínimo", 0.50, 0.98, 0.86, step=0.01,
@@ -446,13 +448,16 @@ with tab_seg:
                     from utils.visualization import overlay_masks, colorize_result
 
                     if method_key in SAM_METHODS:
+                        # Forzar la recolección de basura de memoria RAM
+                        gc.collect()
+
                         valid_ckpt_path = _ensure_sam_checkpoint_by_key(selected_model_key)
                         handler = get_sam_handler(valid_ckpt_path)
                         
                         if method_key == "sam_auto":
                             masks, err = handler.auto_segment(
                                 image_rgb,
-                                points_per_side=params.get("points_per_side", 32),
+                                points_per_side=params.get("points_per_side", 16),
                                 pred_iou_thresh=params.get("pred_iou_thresh", 0.86),
                                 stability_score_thresh=params.get("stability_score_thresh", 0.92),
                                 min_mask_region_area=params.get("min_mask_region_area", 100),
@@ -536,7 +541,7 @@ with tab_compare:
                     elif mkey == "sam_auto":
                         valid_ckpt_path = _ensure_sam_checkpoint_by_key(DEFAULT_MODEL_KEY)
                         handler_c = get_sam_handler(valid_ckpt_path)
-                        masks_c, err_c = handler_c.auto_segment(image_rgb_c, points_per_side=32)
+                        masks_c, err_c = handler_c.auto_segment(image_rgb_c, points_per_side=16)
                         if masks_c:
                             compare_store[label] = overlay_masks(image_rgb_c, masks_c)
                         else:
