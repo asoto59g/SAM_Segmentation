@@ -2,7 +2,7 @@
 app.py
 ------
 Aplicación web de segmentación de imágenes agrícolas / satelitales.
-Integra Lazy Loading, protección anti-OOM, controles para todos los modelos, escalado y descargas.
+Integra Lazy Loading, protección anti-OOM, controles para todos los modelos, escalado, descargas y flujo guiado de SAM por clics.
 """
 
 from __future__ import annotations
@@ -262,7 +262,7 @@ with st.sidebar:
         params["pred_iou_thresh"] = st.slider("Umbral IoU", 0.50, 0.98, 0.88, help="Filtra máscaras de baja confianza.")
         params["min_mask_region_area"] = st.number_input("Área mínima de región (px)", min_value=0, value=500, step=100)
     elif method_key == "sam_click":
-        st.info("💡 Haz clic en la imagen original para agregar puntos. Usa los botones debajo de la imagen para cambiar entre Positivo / Fondo o Limpiar.")
+        st.info("💡 Panel guiado activo: Selecciona el tipo de punto abajo, da clic en la imagen para registrarlo y presiona '▶ Segmentar'.")
     
     if method_key in SAM_METHODS:
         st.markdown("🤖 **Arquitectura SAM**")
@@ -292,6 +292,26 @@ with tab_seg:
         display_img = image_rgb
 
         if method_key == "sam_click":
+            # Panel de estado y guía interactiva de clics
+            st.markdown("##### 🧭 Guía de Estado del Cliqueo")
+            
+            # Selector explícito para el próximo clic
+            point_mode = st.radio(
+                "Tipo para el próximo clic:",
+                options=["🟢 Positivo (Objeto a segmentar)", "🔴 Fondo (Excluir área)"],
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+            next_label_val = 1 if "Positivo" in point_mode else 0
+
+            # Conteo de puntos actuales
+            num_points = len(st.session_state["click_points"])
+            pos_count = sum(1 for l in st.session_state["click_labels"] if l == 1)
+            neg_count = sum(1 for l in st.session_state["click_labels"] if l == 0)
+            
+            st.info(f"📊 **Puntos registrados:** {num_points} total ({pos_count} positivos, {neg_count} fondo). " + 
+                    ("👉 Haz clic sobre la imagen para agregar otro o presiona **Segmentar**." if num_points > 0 else "👉 Haz clic sobre el objeto de interés en la imagen."))
+
             try:
                 from streamlit_image_coordinates import streamlit_image_coordinates
                 if st.session_state["click_points"]:
@@ -300,15 +320,17 @@ with tab_seg:
                 
                 click_value = streamlit_image_coordinates(Image.fromarray(display_img), key="coords")
                 
-                c1, c2, c3 = st.columns(3)
-                with c1: 
-                    if st.button("✅ Positivo", use_container_width=True): 
-                        st.session_state["next_label"] = 1
-                with c2: 
-                    if st.button("❌ Fondo", use_container_width=True): 
-                        st.session_state["next_label"] = 0
-                with c3:
-                    if st.button("🗑️ Limpiar", use_container_width=True):
+                # Botones de control de clics
+                bc1, bc2 = st.columns(2)
+                with bc1:
+                    if st.button("↩️ Deshacer último punto", use_container_width=True, disabled=(num_points == 0)):
+                        if st.session_state["click_points"]:
+                            st.session_state["click_points"].pop()
+                            st.session_state["click_labels"].pop()
+                            st.session_state["last_processed_click"] = None
+                            st.rerun()
+                with bc2:
+                    if st.button("🗑️ Limpiar todos los clics", use_container_width=True, disabled=(num_points == 0)):
                         st.session_state["click_points"] = []
                         st.session_state["click_labels"] = []
                         st.session_state["last_processed_click"] = None
@@ -316,13 +338,14 @@ with tab_seg:
 
                 if click_value:
                     cx, cy = int(click_value["x"]), int(click_value["y"])
-                    click_sig = (cx, cy)
+                    click_sig = (cx, cy, next_label_val)
                     if click_sig != st.session_state.get("last_processed_click"):
                         st.session_state["last_processed_click"] = click_sig
                         st.session_state["click_points"].append((cx, cy))
-                        st.session_state["click_labels"].append(st.session_state.get("next_label", 1))
+                        st.session_state["click_labels"].append(next_label_val)
                         st.rerun()
-            except Exception:
+            except Exception as e:
+                st.warning(f"Error cargando componente de clics: {e}")
                 st.image(display_img, use_container_width=True)
         else:
             st.image(display_img, use_container_width=True)
