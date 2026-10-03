@@ -2,7 +2,7 @@
 core/sam_handler.py
 -------------------
 Manejo de la inferencia y carga de modelos Segment Anything (SAM).
-Optimizado con torch.no_grad() y control de hilos de CPU para evitar throttling en Streamlit Cloud.
+Optimizado con torch.no_grad() y control estricto de hilos CPU para evitar throttling en Streamlit Cloud.
 """
 
 from __future__ import annotations
@@ -12,21 +12,21 @@ from pathlib import Path
 import numpy as np
 import torch
 
-# 1. Configurar variables de entorno antes de cualquier cálculo para controlar librerías C/C++
-os.environ["OMP_NUM_THREADS"] = "2"
-os.environ["MKL_NUM_THREADS"] = "2"
-os.environ["OPENBLAS_NUM_THREADS"] = "2"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
-os.environ["NUMEXPR_NUM_THREADS"] = "2"
+# 1. Variables de entorno antes de cargar librerías C/C++ para controlar hilos
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-# 2. Configurar hilos en PyTorch de forma segura evitando RuntimeError
+# 2. Configuración segura de hilos en PyTorch evitando RuntimeError
 try:
-    torch.set_num_threads(2)
+    torch.set_num_threads(1)
 except Exception:
     pass
 
 try:
-    torch.set_num_interop_threads(2)
+    torch.set_num_interop_threads(1)
 except RuntimeError:
     pass
 
