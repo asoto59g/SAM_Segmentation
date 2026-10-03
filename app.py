@@ -2,10 +2,8 @@
 app.py
 ------
 App web de segmentación de imágenes agrícolas / satelitales.
-Construida con Streamlit + PyTorch + SAM ViT-L.
-
-Ejecutar:
-    streamlit run app.py
+Construida con Streamlit + PyTorch + SAM.
+Soporta selección dinámica de modelos SAM (ViT-B, ViT-L, ViT-H) en entorno local y nube.
 """
 
 from __future__ import annotations
@@ -46,32 +44,44 @@ APP_TITLE = "🌾 Segmentación de Imágenes Agrícolas"
 APP_ICON = "🌿"
 
 # ---------------------------------------------------------------------------
-# Detección Dinámica de Checkpoints (Local vs Streamlit Cloud)
+# Configuración Dinámica de la Ruta de Modelos (Local vs Streamlit Cloud)
 # ---------------------------------------------------------------------------
-_SAM_GDRIVE_FILE_ID = "1Uj9-Shntka1a3k4e49ZFbHHwDV_dC2_d"
-_SAM_FILENAME = "sam_vit_l_0b3195.pth"
-
-_LOCAL_WINDOWS_CHECKPOINT = Path(
+_LOCAL_MODELS_DIR = Path(
     r"C:\Users\AlejandroSotoBarquer\OneDrive - ABC Geomática Agricola SRL\Documentos\ABC_Gis_Activos\01_Clientes\2026\Segmentacion Imagenes\models"
-) / _SAM_FILENAME
+)
+_PROJECT_MODELS_DIR = _APP_DIR / "models"
+_CLOUD_MODELS_DIR = Path("/tmp/sam_models")
 
-_PROJECT_MODEL_CHECKPOINT = _APP_DIR / "models" / _SAM_FILENAME
-_CLOUD_CHECKPOINT = Path("/tmp/sam_models") / _SAM_FILENAME
-
-if _LOCAL_WINDOWS_CHECKPOINT.exists():
-    DEFAULT_SAM_CHECKPOINT = str(_LOCAL_WINDOWS_CHECKPOINT)
-elif _PROJECT_MODEL_CHECKPOINT.exists():
-    DEFAULT_SAM_CHECKPOINT = str(_PROJECT_MODEL_CHECKPOINT)
+# Determinar el directorio de modelos activo
+if _LOCAL_MODELS_DIR.exists():
+    MODELS_DIR = _LOCAL_MODELS_DIR
+elif _PROJECT_MODELS_DIR.exists():
+    MODELS_DIR = _PROJECT_MODELS_DIR
 else:
-    DEFAULT_SAM_CHECKPOINT = str(_CLOUD_CHECKPOINT)
+    MODELS_DIR = _CLOUD_MODELS_DIR
+
+_SAM_GDRIVE_FILE_ID = "1Uj9-Shntka1a3k4e49ZFbHHwDV_dC2_d"
+_DEFAULT_SAM_FILENAME = "sam_vit_b_01ec64.pth"
+DEFAULT_SAM_CHECKPOINT = str(MODELS_DIR / _DEFAULT_SAM_FILENAME)
+
+
+def get_model_type_from_filename(checkpoint_path: str) -> str:
+    """Detecta automáticamente el tipo de arquitectura SAM según el nombre del archivo."""
+    name = Path(checkpoint_path).name.lower()
+    if "vit_h" in name:
+        return "vit_h"
+    elif "vit_l" in name:
+        return "vit_l"
+    else:
+        return "vit_b"
 
 
 def _ensure_sam_checkpoint(target_path: str) -> str:
-    """Descarga el checkpoint SAM ViT-L desde Google Drive si no existe en disco."""
+    """Descarga el checkpoint SAM predeterminado desde Google Drive si no existe en disco."""
     checkpoint_path = Path(target_path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if checkpoint_path.exists() and checkpoint_path.stat().st_size > 100_000_000:
+    if checkpoint_path.exists() and checkpoint_path.stat().st_size > 50_000_000:
         st.session_state["sam_download_error"] = None
         return str(checkpoint_path)
 
@@ -86,10 +96,10 @@ def _ensure_sam_checkpoint(target_path: str) -> str:
             st.session_state["sam_download_error"] = (
                 "gdown retornó None. Asegúrate de que el enlace de Drive sea público."
             )
-        elif checkpoint_path.exists() and checkpoint_path.stat().st_size < 100_000_000:
+        elif checkpoint_path.exists() and checkpoint_path.stat().st_size < 50_000_000:
             mb = checkpoint_path.stat().st_size // 1024 // 1024
             st.session_state["sam_download_error"] = (
-                f"Descarga incompleta: {mb} MB obtenidos (se esperan ~1200 MB)."
+                f"Descarga incompleta: {mb} MB obtenidos."
             )
 
     except Exception:
@@ -162,7 +172,7 @@ def _init_state() -> None:
 _init_state()
 
 
-# Carga diferida (Lazy Load) de SAM con Caché
+# Carga diferida de SAM con manejo compatible de argumentos
 @st.cache_resource(show_spinner=False)
 def get_sam_handler(checkpoint_path: str):
     import torch
@@ -171,7 +181,14 @@ def get_sam_handler(checkpoint_path: str):
     except Exception:
         pass
     from core.sam_handler import SAMHandler
-    return SAMHandler(checkpoint_path=checkpoint_path, model_type="vit_l")
+    
+    model_type = get_model_type_from_filename(checkpoint_path)
+    
+    # Manejar compatibilidad si la clase SAMHandler acepta o no model_type
+    try:
+        return SAMHandler(checkpoint_path=checkpoint_path, model_type=model_type)
+    except TypeError:
+        return SAMHandler(checkpoint_path=checkpoint_path)
 
 
 @st.cache_resource(show_spinner=False)
@@ -284,10 +301,25 @@ with st.sidebar:
 
     if method_key in SAM_METHODS:
         st.markdown("🤖 **Estado de SAM**")
-        sam_path = st.text_input("Ruta checkpoint .pth", value=DEFAULT_SAM_CHECKPOINT)
-        ckpt_exists = Path(sam_path).exists() and Path(sam_path).stat().st_size > 100_000_000
+        
+        # Buscar modelos .pth en la carpeta de modelos activa
+        available_pths = list(MODELS_DIR.glob("*.pth")) if MODELS_DIR.exists() else []
+        pth_options = [str(p) for p in available_pths]
+        
+        if pth_options:
+            sam_path = st.selectbox(
+                "Selecciona Checkpoint .pth",
+                options=pth_options,
+                index=0,
+            )
+        else:
+            sam_path = st.text_input("Ruta checkpoint .pth", value=DEFAULT_SAM_CHECKPOINT)
+
+        ckpt_exists = Path(sam_path).exists() and Path(sam_path).stat().st_size > 50_000_000
         if ckpt_exists:
-            st.success("✅ Checkpoint detectado en disco")
+            mb = Path(sam_path).stat().st_size // 1024 // 1024
+            mtype = get_model_type_from_filename(sam_path).upper()
+            st.success(f"✅ Modelo {mtype} detectado ({mb} MB)")
         else:
             st.warning("⏳ Checkpoint no encontrado. Se descargará al ejecutar SAM.")
 
