@@ -2,24 +2,31 @@
 app.py
 ------
 App web de segmentación de imágenes agrícolas / satelitales.
-Construida con Streamlit + PyTorch + SAM.
-Diseñado con protección de importación para evitar fallos de compilación en Streamlit Cloud.
+Construida con Streamlit + PyTorch + SAM ViT-L.
+
+Ejecutar:
+    streamlit run app.py
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import threading as _threading
 import traceback
 from pathlib import Path
 
-# 1. Ajuste estricto de variables de entorno para hilos CPU antes de cualquier cálculo
+# ---------------------------------------------------------------------------
+# 1. Configuración de recursos del sistema (EVITA THROTTLING EN CLOUD)
+# ---------------------------------------------------------------------------
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
+import numpy as np
+from PIL import Image
 import streamlit as st
 
 # La configuración de página DEBE ser la primera instrucción de Streamlit
@@ -35,20 +42,63 @@ _APP_DIR = Path(__file__).parent.resolve()
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
-# ---------------------------------------------------------------------------
-# Verificación e importación segura de librerías esenciales
-# ---------------------------------------------------------------------------
-try:
-    import numpy as np
-    from PIL import Image
-except Exception as init_err:
-    st.error("❌ Fallo crítico al iniciar las librerías base:")
-    st.code(traceback.format_exc())
-    st.stop()
-
 APP_TITLE = "🌾 Segmentación de Imágenes Agrícolas"
 APP_ICON = "🌿"
-DEFAULT_SAM_CHECKPOINT = str(Path("/tmp/sam_models") / "sam_vit_b.pth")
+
+# ---------------------------------------------------------------------------
+# Detección Dinámica de Checkpoints (Local vs Streamlit Cloud)
+# ---------------------------------------------------------------------------
+_SAM_GDRIVE_FILE_ID = "1Uj9-Shntka1a3k4e49ZFbHHwDV_dC2_d"
+_SAM_FILENAME = "sam_vit_l_0b3195.pth"
+
+_LOCAL_WINDOWS_CHECKPOINT = Path(
+    r"C:\Users\AlejandroSotoBarquer\OneDrive - ABC Geomática Agricola SRL\Documentos\ABC_Gis_Activos\01_Clientes\2026\Segmentacion Imagenes\models"
+) / _SAM_FILENAME
+
+_PROJECT_MODEL_CHECKPOINT = _APP_DIR / "models" / _SAM_FILENAME
+_CLOUD_CHECKPOINT = Path("/tmp/sam_models") / _SAM_FILENAME
+
+if _LOCAL_WINDOWS_CHECKPOINT.exists():
+    DEFAULT_SAM_CHECKPOINT = str(_LOCAL_WINDOWS_CHECKPOINT)
+elif _PROJECT_MODEL_CHECKPOINT.exists():
+    DEFAULT_SAM_CHECKPOINT = str(_PROJECT_MODEL_CHECKPOINT)
+else:
+    DEFAULT_SAM_CHECKPOINT = str(_CLOUD_CHECKPOINT)
+
+
+def _ensure_sam_checkpoint(target_path: str) -> str:
+    """Descarga el checkpoint SAM ViT-L desde Google Drive si no existe en disco."""
+    checkpoint_path = Path(target_path)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if checkpoint_path.exists() and checkpoint_path.stat().st_size > 100_000_000:
+        st.session_state["sam_download_error"] = None
+        return str(checkpoint_path)
+
+    st.session_state["sam_download_error"] = None
+
+    try:
+        import gdown
+        url = f"https://drive.google.com/uc?id={_SAM_GDRIVE_FILE_ID}"
+        result = gdown.download(url, str(checkpoint_path), quiet=False, fuzzy=True)
+
+        if result is None:
+            st.session_state["sam_download_error"] = (
+                "gdown retornó None. Asegúrate de que el enlace de Drive sea público."
+            )
+        elif checkpoint_path.exists() and checkpoint_path.stat().st_size < 100_000_000:
+            mb = checkpoint_path.stat().st_size // 1024 // 1024
+            st.session_state["sam_download_error"] = (
+                f"Descarga incompleta: {mb} MB obtenidos (se esperan ~1200 MB)."
+            )
+
+    except Exception:
+        st.session_state["sam_download_error"] = (
+            f"Error en descarga:\n{traceback.format_exc()}"
+        )
+
+    return str(checkpoint_path)
+
 
 # ---------------------------------------------------------------------------
 # Mapeos de Métodos
@@ -76,6 +126,7 @@ COMPARE_OPTIONS: list[str] = [
     "5 · K-Means",
     "6 · Mean-Shift",
     "7 · GrabCut",
+    "8 · SAM – Automático",
 ]
 
 COMPARE_METHOD_MAP: dict[str, str] = {
@@ -87,20 +138,22 @@ COMPARE_METHOD_MAP: dict[str, str] = {
     "5 · K-Means":         "kmeans",
     "6 · Mean-Shift":      "meanshift",
     "7 · GrabCut":         "grabcut",
+    "8 · SAM – Automático":"sam_auto",
 }
 
 
 def _init_state() -> None:
     defaults = {
-        "image_rgb":       None,
-        "metadata":        None,
-        "filename":        None,
-        "result_rgb":      None,
-        "result_method":   None,
-        "sam_masks":       None,
-        "click_points":    [],
-        "click_labels":    [],
-        "compare_results": {},
+        "image_rgb":          None,
+        "metadata":           None,
+        "filename":           None,
+        "result_rgb":         None,
+        "result_method":      None,
+        "sam_masks":          None,
+        "click_points":       [],
+        "click_labels":       [],
+        "compare_results":    {},
+        "sam_download_error": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -118,7 +171,7 @@ def get_sam_handler(checkpoint_path: str):
     except Exception:
         pass
     from core.sam_handler import SAMHandler
-    return SAMHandler(checkpoint_path=checkpoint_path)
+    return SAMHandler(checkpoint_path=checkpoint_path, model_type="vit_l")
 
 
 @st.cache_resource(show_spinner=False)
@@ -232,11 +285,11 @@ with st.sidebar:
     if method_key in SAM_METHODS:
         st.markdown("🤖 **Estado de SAM**")
         sam_path = st.text_input("Ruta checkpoint .pth", value=DEFAULT_SAM_CHECKPOINT)
-        ckpt_exists = Path(sam_path).exists()
+        ckpt_exists = Path(sam_path).exists() and Path(sam_path).stat().st_size > 100_000_000
         if ckpt_exists:
             st.success("✅ Checkpoint detectado en disco")
         else:
-            st.info("💡 Coloca el archivo checkpoint .pth para habilitar SAM.")
+            st.warning("⏳ Checkpoint no encontrado. Se descargará al ejecutar SAM.")
 
     st.markdown("---")
     st.caption("ABC Geomática Agrícola SRL · 2026")
@@ -323,7 +376,9 @@ with tab_seg:
                     from utils.visualization import overlay_masks, colorize_result
 
                     if method_key in SAM_METHODS:
-                        handler = get_sam_handler(DEFAULT_SAM_CHECKPOINT)
+                        valid_ckpt_path = _ensure_sam_checkpoint(sam_path)
+                        handler = get_sam_handler(valid_ckpt_path)
+                        
                         if method_key == "sam_auto":
                             masks, err = handler.auto_segment(
                                 image_rgb,
@@ -396,7 +451,7 @@ with tab_compare:
     if run_compare and len(selected_labels) >= 2:
         with st.spinner("Procesando comparación…"):
             try:
-                from utils.visualization import colorize_result, create_comparison_grid
+                from utils.visualization import colorize_result, create_comparison_grid, overlay_masks
                 segmenter_c = get_segmenter()
                 compare_store: dict[str, np.ndarray] = {}
 
@@ -407,6 +462,14 @@ with tab_compare:
                     elif mkey == "grabcut":
                         raw = safe_run_grabcut(segmenter_c, image_rgb_c)
                         compare_store[label] = colorize_result(raw, mkey)
+                    elif mkey == "sam_auto":
+                        valid_ckpt_path = _ensure_sam_checkpoint(DEFAULT_SAM_CHECKPOINT)
+                        handler_c = get_sam_handler(valid_ckpt_path)
+                        masks_c, err_c = handler_c.auto_segment(image_rgb_c, points_per_side=8)
+                        if masks_c:
+                            compare_store[label] = overlay_masks(image_rgb_c, masks_c)
+                        else:
+                            compare_store[label] = image_rgb_c.copy()
                     else:
                         raw = segmenter_c.run(mkey, image_rgb_c)
                         compare_store[label] = colorize_result(raw, mkey)
