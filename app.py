@@ -2,7 +2,7 @@
 app.py
 ------
 Aplicación web de segmentación de imágenes agrícolas / satelitales.
-Integra Lazy Loading, protección anti-OOM, parámetros para todos los modelos, escalado y descargas.
+Integra Lazy Loading, protección anti-OOM, controles para todos los modelos, escalado y descargas.
 """
 
 from __future__ import annotations
@@ -136,6 +136,7 @@ def _init_state() -> None:
         "click_points":       [],
         "click_labels":       [],
         "loaded_sam_path":    None,
+        "last_processed_click": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -213,7 +214,6 @@ with st.sidebar:
             
             orig_h, orig_w = image_rgb.shape[:2]
             
-            # Lógica de reescalado dinámico
             if max_input_dim is not None and max(orig_h, orig_w) > max_input_dim:
                 if scale_option != "1024 px (Recomendado Cloud)":
                     st.warning(f"Imagen escalada a {max_input_dim}px. ⚠️ Tamaños muy grandes pueden causar estrangulamiento de CPU (Throttling).")
@@ -230,6 +230,7 @@ with st.sidebar:
             st.session_state["sam_masks"] = None
             st.session_state["click_points"] = []
             st.session_state["click_labels"] = []
+            st.session_state["last_processed_click"] = None
         except Exception as e:
             st.error(f"Error cargando imagen: {e}")
 
@@ -237,12 +238,9 @@ with st.sidebar:
     method_label = st.selectbox("Método", options=list(METHOD_LABELS.keys()), index=7, label_visibility="collapsed")
     method_key = METHOD_LABELS[method_label]
 
-    st.markdown("⚙️️ **Parámetros de Configuración**")
+    st.markdown("⚙ **Parámetros de Configuración**")
     params: dict = {}
     
-    # -----------------------------------------------------------------------
-    # Controles de parámetros expandidos para TODOS los modelos
-    # -----------------------------------------------------------------------
     if method_key == "otsu":
         params["blur_kernel"] = st.slider("Tamaño suavizado (px)", 1, 31, 5, step=2)
     elif method_key == "canny":
@@ -264,7 +262,7 @@ with st.sidebar:
         params["pred_iou_thresh"] = st.slider("Umbral IoU", 0.50, 0.98, 0.88, help="Filtra máscaras de baja confianza.")
         params["min_mask_region_area"] = st.number_input("Área mínima de región (px)", min_value=0, value=500, step=100)
     elif method_key == "sam_click":
-        st.info("💡 Haz clic en la imagen original (panel principal) para agregar puntos y guiar el modelo.")
+        st.info("💡 Haz clic en la imagen original para agregar puntos. Usa los botones debajo de la imagen para cambiar entre Positivo / Fondo o Limpiar.")
     
     if method_key in SAM_METHODS:
         st.markdown("🤖 **Arquitectura SAM**")
@@ -304,18 +302,23 @@ with tab_seg:
                 
                 c1, c2, c3 = st.columns(3)
                 with c1: 
-                    if st.button("✅ Positivo", use_container_width=True): st.session_state["next_label"] = 1
+                    if st.button("✅ Positivo", use_container_width=True): 
+                        st.session_state["next_label"] = 1
                 with c2: 
-                    if st.button("❌ Fondo", use_container_width=True): st.session_state["next_label"] = 0
+                    if st.button("❌ Fondo", use_container_width=True): 
+                        st.session_state["next_label"] = 0
                 with c3:
                     if st.button("🗑️ Limpiar", use_container_width=True):
                         st.session_state["click_points"] = []
                         st.session_state["click_labels"] = []
+                        st.session_state["last_processed_click"] = None
                         st.rerun()
 
                 if click_value:
                     cx, cy = int(click_value["x"]), int(click_value["y"])
-                    if not st.session_state["click_points"] or st.session_state["click_points"][-1] != (cx, cy):
+                    click_sig = (cx, cy)
+                    if click_sig != st.session_state.get("last_processed_click"):
+                        st.session_state["last_processed_click"] = click_sig
                         st.session_state["click_points"].append((cx, cy))
                         st.session_state["click_labels"].append(st.session_state.get("next_label", 1))
                         st.rerun()
@@ -361,7 +364,6 @@ with tab_seg:
                         if method_key == "grabcut":
                             result_raw = safe_run_grabcut(segmenter, image_rgb, **params)
                         else:
-                            # Se pasan todos los parámetros capturados del sidebar al modelo correspondiente
                             result_raw = segmenter.run(method_key, image_rgb, **params)
                         st.session_state["result_rgb"] = colorize_result(result_raw, method_key)
 
