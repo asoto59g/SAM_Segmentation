@@ -83,9 +83,6 @@ SAM_MODEL_CONFIGS = {
 
 DEFAULT_MODEL_KEY = "ViT-B (Base - Rápido)"
 
-# Límite de dimensión para downscale opt-in
-MAX_PROCESSING_DIM = 2048
-
 
 def get_model_type_from_filename(checkpoint_path: str) -> str:
     name = Path(checkpoint_path).name.lower()
@@ -192,10 +189,6 @@ def _init_state() -> None:
         "compare_results":    {},
         "sam_download_error": None,
         "loaded_sam_path":    None,
-        # Cache de bytes de descarga
-        "cached_png_bytes":   None,
-        "cached_tiff_bytes":  None,
-        "cached_result_id":   None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -204,7 +197,7 @@ def _init_state() -> None:
 _init_state()
 
 
-@st.cache_resource(show_spinner=False, max_entries=1, ttl=3600)
+@st.cache_resource(show_spinner=False)
 def load_sam_handler_instance(checkpoint_path: str, model_type: str):
     import torch
     try:
@@ -230,7 +223,7 @@ def get_sam_handler(checkpoint_path: str):
     return load_sam_handler_instance(checkpoint_path, model_type)
 
 
-@st.cache_resource(show_spinner=False, max_entries=1, ttl=3600)
+@st.cache_resource(show_spinner=False)
 def get_segmenter():
     from core.segmentation import ClassicSegmenter
     return ClassicSegmenter()
@@ -257,33 +250,6 @@ def safe_run_grabcut(segmenter, image_rgb: np.ndarray, margin_frac: float = 0.1)
         return mask_full
     else:
         return segmenter.run("grabcut", image_rgb, margin_frac=margin_frac)
-
-
-def downscale_if_needed(
-    image_rgb: np.ndarray,
-    max_dim: int = MAX_PROCESSING_DIM,
-) -> tuple[np.ndarray, float | None]:
-    """
-    Redimensiona la imagen si supera max_dim, manteniendo proporción.
-    Retorna (imagen_procesada, scale_factor).
-    Si no hay downscale, scale_factor = None.
-    """
-    h, w = image_rgb.shape[:2]
-    current_max = max(h, w)
-    if current_max <= max_dim:
-        return image_rgb, None
-    scale = max_dim / current_max
-    new_w, new_h = int(w * scale), int(h * scale)
-    import cv2
-    small_img = cv2.resize(image_rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    return small_img, scale
-
-
-def upscale_mask(mask: np.ndarray, orig_shape: tuple[int, int], scale: float) -> np.ndarray:
-    """Escala una máscara booleana/uint8 al tamaño original con INTER_NEAREST."""
-    import cv2
-    h, w = orig_shape[:2]
-    return cv2.resize(mask.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST).astype(bool)
 
 
 # ---------------------------------------------------------------------------
@@ -397,25 +363,6 @@ with st.sidebar:
         else:
             st.info("☁️ Se descargará automáticamente al ejecutar.")
 
-        # Advertencia ViT-H en cloud
-        if selected_model_key == "ViT-H (Huge - Alta Precisión)" and MODELS_DIR == _CLOUD_MODELS_DIR:
-            st.warning("⚠️ ViT-H (~2.5 GB) puede exceder el límite de RAM en Streamlit Cloud. ")
-            st.caption("   Recomendado: ViT-B o ViT-L en cloud.")
-
-    # Downscale opt-in
-    st.markdown("⚡ **Rendimiento**")
-    limit_size = st.checkbox(
-        "Limitar tamaño de procesamiento a 2048 px",
-        value=False,
-        help="Reduce la imagen antes de procesar (upscale final con INTER_NEAREST). ")
-        
-    st.session_state["limit_processing_size"] = limit_size
-
-    if st.session_state["image_rgb"] is not None:
-        h, w = st.session_state["image_rgb"].shape[:2]
-        if max(h, w) > MAX_PROCESSING_DIM:
-            st.warning(f"⚠️ Imagen grande ({w}×{h} px). Activar 'Limitar tamaño' acelera y ahorra RAM.")
-
     st.markdown("---")
     st.caption("ABC Geomática Agrícola SRL · 2026")
 
@@ -500,15 +447,6 @@ with tab_seg:
                 try:
                     from utils.visualization import overlay_masks, colorize_result
 
-                    # Downscale opt-in
-                    limit_size = st.session_state.get("limit_processing_size", False)
-                    proc_image = image_rgb
-                    scale = None
-                    if limit_size:
-                        proc_image, scale = downscale_if_needed(image_rgb, MAX_PROCESSING_DIM)
-                        if scale is not None:
-                            st.info(f"⚡ Procesando versión reducida ({proc_image.shape[1]}×{proc_image.shape[0]} px)")
-
                     if method_key in SAM_METHODS:
                         # Forzar la recolección de basura de memoria RAM
                         gc.collect()
@@ -518,7 +456,7 @@ with tab_seg:
                         
                         if method_key == "sam_auto":
                             masks, err = handler.auto_segment(
-                                proc_image,
+                                image_rgb,
                                 points_per_side=params.get("points_per_side", 16),
                                 pred_iou_thresh=params.get("pred_iou_thresh", 0.86),
                                 stability_score_thresh=params.get("stability_score_thresh", 0.92),
@@ -526,7 +464,7 @@ with tab_seg:
                             )
                         else:
                             masks, err = handler.point_segment(
-                                proc_image,
+                                image_rgb,
                                 points=st.session_state["click_points"],
                                 labels=st.session_state["click_labels"],
                             )
@@ -534,25 +472,13 @@ with tab_seg:
                         if err:
                             st.error(err)
                         elif masks is not None:
-                            # Upscale máscaras si hubo downscale
-                            if scale is not None:
-                                for m in masks:
-                                    if "segmentation" in m:
-                                        m["segmentation"] = upscale_mask(m["segmentation"], image_rgb.shape, scale)
                             st.session_state["sam_masks"]  = masks
                             st.session_state["result_rgb"] = overlay_masks(image_rgb, masks)
                             st.session_state["result_method"] = method_key
                     else:
                         segmenter = get_segmenter()
                         if method_key == "grabcut":
-                            # GrabCut ya tiene su propio downscale interno
                             result_raw = safe_run_grabcut(segmenter, image_rgb, margin_frac=params.get("margin_frac", 0.1))
-                        elif limit_size and scale is not None:
-                            # Procesar en versión reducida y upscale resultado
-                            result_raw = segmenter.run(method_key, proc_image, **params)
-                            import cv2
-                            h, w = image_rgb.shape[:2]
-                            result_raw = cv2.resize(result_raw, (w, h), interpolation=cv2.INTER_NEAREST)
                         else:
                             result_raw = segmenter.run(method_key, image_rgb, **params)
 
@@ -569,20 +495,17 @@ with tab_seg:
         if result_rgb is not None:
             st.image(result_rgb, width="stretch")
 
-            # Cache de bytes de descarga: solo recalcular si cambió el resultado
-            current_result_id = id(result_rgb)
-            if st.session_state["cached_result_id"] != current_result_id:
-                from utils.image_io import image_to_bytes, geotiff_to_bytes
-                st.session_state["cached_png_bytes"] = image_to_bytes(result_rgb, fmt="png")
-                st.session_state["cached_tiff_bytes"] = geotiff_to_bytes(result_rgb, metadata or {})
-                st.session_state["cached_result_id"] = current_result_id
-
             dl_col1, dl_col2 = st.columns(2)
             with dl_col1:
-                st.download_button("⬇️ PNG", st.session_state["cached_png_bytes"], _build_filename("png"), "image/png", width="stretch")
+                from utils.image_io import image_to_bytes
+                png_bytes = image_to_bytes(result_rgb, fmt="png")
+                st.download_button("⬇️ PNG", png_bytes, _build_filename("png"), "image/png", width="stretch")
 
             with dl_col2:
-                st.download_button("⬇️ GeoTIFF", st.session_state["cached_tiff_bytes"], _build_filename("tif"), "image/tiff", width="stretch")
+                from utils.image_io import geotiff_to_bytes
+                has_geo = metadata and metadata.get("crs") is not None
+                tiff_bytes = geotiff_to_bytes(result_rgb, metadata or {})
+                st.download_button("⬇️ GeoTIFF", tiff_bytes, _build_filename("tif"), "image/tiff", width="stretch")
 
 
 # ---------------------------------------------------------------------------
