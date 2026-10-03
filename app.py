@@ -2,7 +2,7 @@
 app.py
 ------
 Aplicación web de segmentación de imágenes agrícolas / satelitales.
-Integra Lazy Loading, protección anti-OOM, controles de modelo, escalado dinámico y descargas en PNG/GeoTIFF.
+Integra Lazy Loading, protección anti-OOM, parámetros para todos los modelos, escalado y descargas.
 """
 
 from __future__ import annotations
@@ -164,18 +164,20 @@ def get_segmenter():
     from core.segmentation import ClassicSegmenter
     return ClassicSegmenter()
 
-def safe_run_grabcut(segmenter, image_rgb: np.ndarray, margin_frac: float = 0.1) -> np.ndarray:
+def safe_run_grabcut(segmenter, image_rgb: np.ndarray, **kwargs) -> np.ndarray:
     """Escalado preventivo para GrabCut evitando colapso OOM."""
     import cv2
     h, w = image_rgb.shape[:2]
     max_dim = 800
+    margin_frac = kwargs.pop("margin_frac", 0.1)
+    
     if max(h, w) > max_dim:
         scale = max_dim / float(max(h, w))
         new_w, new_h = int(w * scale), int(h * scale)
         small_img = cv2.resize(image_rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        mask_small = segmenter.run("grabcut", small_img, margin_frac=margin_frac)
+        mask_small = segmenter.run("grabcut", small_img, margin_frac=margin_frac, **kwargs)
         return cv2.resize(mask_small.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
-    return segmenter.run("grabcut", image_rgb, margin_frac=margin_frac)
+    return segmenter.run("grabcut", image_rgb, margin_frac=margin_frac, **kwargs)
 
 # ---------------------------------------------------------------------------
 # INTERFAZ - SIDEBAR
@@ -235,14 +237,34 @@ with st.sidebar:
     method_label = st.selectbox("Método", options=list(METHOD_LABELS.keys()), index=7, label_visibility="collapsed")
     method_key = METHOD_LABELS[method_label]
 
-    st.markdown("⚙ **Parámetros**")
+    st.markdown("⚙️️ **Parámetros de Configuración**")
     params: dict = {}
+    
+    # -----------------------------------------------------------------------
+    # Controles de parámetros expandidos para TODOS los modelos
+    # -----------------------------------------------------------------------
     if method_key == "otsu":
-        params["blur_kernel"] = st.slider("Tamaño suavizado (px)", 1, 21, 5, step=2)
+        params["blur_kernel"] = st.slider("Tamaño suavizado (px)", 1, 31, 5, step=2)
+    elif method_key == "canny":
+        params["sigma"] = st.slider("Sigma (suavizado)", 0.5, 5.0, 1.0, step=0.1)
+    elif method_key == "kmeans":
+        params["n_clusters"] = st.slider("Número de clústeres (K)", 2, 20, 5)
+    elif method_key == "meanshift":
+        params["spatial_radius"] = st.slider("Radio espacial", 1, 50, 15)
+        params["color_radius"] = st.slider("Radio de color", 1, 50, 15)
+    elif method_key == "watershed":
+        params["compactness"] = st.slider("Compacidad", 0.001, 0.1, 0.01, step=0.001, format="%.3f")
+    elif method_key == "region_growing":
+        params["tolerance"] = st.slider("Tolerancia", 0.01, 0.5, 0.1, step=0.01)
+    elif method_key == "grabcut":
+        params["margin_frac"] = st.slider("Margen inicial (%)", 1, 40, 10) / 100.0
+        params["iterCount"] = st.slider("Iteraciones", 1, 10, 5)
     elif method_key == "sam_auto":
         params["points_per_side"] = st.slider("Puntos por lado", 4, 32, 8, help="Más puntos = más detalle, pero requiere muchísimo más procesamiento de CPU.")
         params["pred_iou_thresh"] = st.slider("Umbral IoU", 0.50, 0.98, 0.88, help="Filtra máscaras de baja confianza.")
         params["min_mask_region_area"] = st.number_input("Área mínima de región (px)", min_value=0, value=500, step=100)
+    elif method_key == "sam_click":
+        st.info("💡 Haz clic en la imagen original (panel principal) para agregar puntos y guiar el modelo.")
     
     if method_key in SAM_METHODS:
         st.markdown("🤖 **Arquitectura SAM**")
@@ -337,8 +359,9 @@ with tab_seg:
                     else:
                         segmenter = get_segmenter()
                         if method_key == "grabcut":
-                            result_raw = safe_run_grabcut(segmenter, image_rgb)
+                            result_raw = safe_run_grabcut(segmenter, image_rgb, **params)
                         else:
+                            # Se pasan todos los parámetros capturados del sidebar al modelo correspondiente
                             result_raw = segmenter.run(method_key, image_rgb, **params)
                         st.session_state["result_rgb"] = colorize_result(result_raw, method_key)
 
