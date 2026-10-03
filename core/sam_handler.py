@@ -49,43 +49,31 @@ class SAMHandler:
                 f"Opciones válidas: {list(sam_model_registry.keys())}"
             )
 
-        # Determinar el dispositivo de cómputo (GPU si está disponible, de lo contrario CPU)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        # Cargar la arquitectura y los pesos correspondientes
         self.sam = sam_model_registry[self.model_type](checkpoint=self.checkpoint_path)
         self.sam.to(device=self.device)
-
-        # Instanciar el predictor de puntos/recuadros
         self.predictor = SamPredictor(self.sam)
 
     def auto_segment(
         self,
         image_rgb: np.ndarray,
-        points_per_side: int = 8,
-        pred_iou_thresh: float = 0.88,
-        min_mask_region_area: int = 500,
+        points_per_side: int = 32,
+        pred_iou_thresh: float = 0.86,
+        stability_score_thresh: float = 0.92,
+        min_mask_region_area: int = 100,
+        **kwargs,
     ) -> tuple[list[dict] | None, str | None]:
         """
-        Genera una segmentación automática en toda la imagen mediante una grilla de puntos.
-
-        Args:
-            image_rgb (np.ndarray): Imagen de entrada en formato RGB (H, W, 3).
-            points_per_side (int): Cantidad de puntos por lado en la grilla.
-            pred_iou_thresh (float): Umbral mínimo de IoU estimado para conservar una máscara.
-            min_mask_region_area (int): Área mínima en píxeles para filtrar regiones pequeñas.
-
-        Returns:
-            tuple[list[dict] | None, str | None]:
-                - Lista de diccionarios de máscaras si la ejecución es exitosa.
-                - Mensaje de error si ocurre alguna falla, o None si no hay errores.
+        Genera una segmentación automática en toda la imagen.
         """
         try:
             mask_generator = SamAutomaticMaskGenerator(
                 model=self.sam,
                 points_per_side=points_per_side,
                 pred_iou_thresh=pred_iou_thresh,
+                stability_score_thresh=stability_score_thresh,
                 min_mask_region_area=min_mask_region_area,
+                crop_n_layers=1 if points_per_side >= 32 else 0,
             )
             masks = mask_generator.generate(image_rgb)
             return masks, None
@@ -100,36 +88,23 @@ class SAMHandler:
         labels: list[int],
     ) -> tuple[list[dict] | None, str | None]:
         """
-        Genera segmentación basada en clics o puntos promotor/exclusión (prompting).
-
-        Args:
-            image_rgb (np.ndarray): Imagen de entrada en formato RGB (H, W, 3).
-            points (list[tuple[int, int]]): Lista de coordenadas (x, y) de los clics.
-            labels (list[int]): Lista de etiquetas asociadas (1 para positivo, 0 para fondo).
-
-        Returns:
-            tuple[list[dict] | None, str | None]:
-                - Lista de diccionarios con la estructura estándar de máscaras SAM.
-                - Mensaje de error si ocurre alguna falla, o None si no hay errores.
+        Genera segmentación basada en clics/puntos (prompting).
         """
         if not points:
             return None, "No se proporcionaron puntos para la segmentación."
 
         try:
-            # Configurar imagen en el predictor de SAM
             self.predictor.set_image(image_rgb)
 
             input_points = np.array(points, dtype=np.float32)
             input_labels = np.array(labels, dtype=np.int32)
 
-            # Predecir máscaras asociadas a los puntos
             masks, scores, logits = self.predictor.predict(
                 point_coords=input_points,
                 point_labels=input_labels,
                 multimask_output=True,
             )
 
-            # Seleccionar la máscara con mayor puntuación (score)
             best_idx = int(np.argmax(scores))
             best_mask = masks[best_idx]
 
