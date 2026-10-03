@@ -72,6 +72,8 @@ def get_model_type_from_filename(checkpoint_path: str) -> str:
         return "vit_h"
     elif "vit_l" in name:
         return "vit_l"
+    elif "vit_b" in name:
+        return "vit_b"
     else:
         return "vit_b"
 
@@ -164,6 +166,7 @@ def _init_state() -> None:
         "click_labels":       [],
         "compare_results":    {},
         "sam_download_error": None,
+        "loaded_sam_path":    None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -172,9 +175,9 @@ def _init_state() -> None:
 _init_state()
 
 
-# Carga diferida de SAM con manejo compatible de argumentos
+# Carga diferida de SAM pasando explícitamente la ruta y el tipo de modelo
 @st.cache_resource(show_spinner=False)
-def get_sam_handler(checkpoint_path: str):
+def load_sam_handler_instance(checkpoint_path: str, model_type: str):
     import torch
     try:
         torch.set_num_threads(1)
@@ -182,13 +185,22 @@ def get_sam_handler(checkpoint_path: str):
         pass
     from core.sam_handler import SAMHandler
     
-    model_type = get_model_type_from_filename(checkpoint_path)
-    
-    # Manejar compatibilidad si la clase SAMHandler acepta o no model_type
     try:
         return SAMHandler(checkpoint_path=checkpoint_path, model_type=model_type)
     except TypeError:
         return SAMHandler(checkpoint_path=checkpoint_path)
+
+
+def get_sam_handler(checkpoint_path: str):
+    """Wrapper para obtener el handler de SAM e invalidar caché si cambia de archivo."""
+    model_type = get_model_type_from_filename(checkpoint_path)
+    
+    # Limpiar la caché si cambia el archivo del checkpoint para evitar conflictos de dimensiones
+    if st.session_state.get("loaded_sam_path") != checkpoint_path:
+        load_sam_handler_instance.clear()
+        st.session_state["loaded_sam_path"] = checkpoint_path
+        
+    return load_sam_handler_instance(checkpoint_path, model_type)
 
 
 @st.cache_resource(show_spinner=False)
