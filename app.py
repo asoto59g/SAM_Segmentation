@@ -3,7 +3,8 @@ app.py
 ------
 App web de segmentación de imágenes agrícolas / satelitales.
 Construida con Streamlit + PyTorch + SAM.
-Soporta descarga automática de modelos SAM (ViT-B, ViT-L, ViT-H) en entorno local y nube.
+Soporta descarga automática de modelos SAM (ViT-B, ViT-L, ViT-H) en entorno local y nube,
+así como el ajuste interactivo de todos sus parámetros.
 """
 
 from __future__ import annotations
@@ -61,7 +62,6 @@ else:
 
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Enlaces de descarga directos (Meta / Facebook AI Research)
 SAM_MODEL_CONFIGS = {
     "ViT-B (Base - Rápido)": {
         "filename": "sam_vit_b_01ec64.pth",
@@ -84,7 +84,6 @@ DEFAULT_MODEL_KEY = "ViT-B (Base - Rápido)"
 
 
 def get_model_type_from_filename(checkpoint_path: str) -> str:
-    """Detecta automáticamente el tipo de arquitectura SAM según el nombre del archivo."""
     name = Path(checkpoint_path).name.lower()
     if "vit_h" in name:
         return "vit_h"
@@ -95,7 +94,6 @@ def get_model_type_from_filename(checkpoint_path: str) -> str:
 
 
 def download_checkpoint_with_progress(url: str, dest_path: Path) -> None:
-    """Descarga un archivo con una barra de progreso nativa en Streamlit."""
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -115,15 +113,12 @@ def download_checkpoint_with_progress(url: str, dest_path: Path) -> None:
 
 
 def _ensure_sam_checkpoint_by_key(model_key: str) -> str:
-    """Garantiza la presencia del checkpoint SAM seleccionado, descargándolo si no existe."""
     config = SAM_MODEL_CONFIGS[model_key]
     target_path = MODELS_DIR / config["filename"]
 
-    # Si ya existe y pesa más de 50 MB, retornar ruta directamente
     if target_path.exists() and target_path.stat().st_size > 50_000_000:
         return str(target_path)
 
-    # Intentar descargar automáticamente desde la URL directa
     try:
         st.info(f"⚡ Inicializando descarga automática de {model_key} en Streamlit Cloud...")
         download_checkpoint_with_progress(config["url"], target_path)
@@ -217,7 +212,6 @@ def load_sam_handler_instance(checkpoint_path: str, model_type: str):
 
 
 def get_sam_handler(checkpoint_path: str):
-    """Wrapper para obtener el handler de SAM e invalidar caché si cambia de archivo."""
     model_type = get_model_type_from_filename(checkpoint_path)
     
     if st.session_state.get("loaded_sam_path") != checkpoint_path:
@@ -296,7 +290,7 @@ with st.sidebar:
     method_label = st.selectbox(
         "Método",
         options=list(METHOD_LABELS.keys()),
-        index=4,
+        index=7,
         label_visibility="collapsed",
     )
     method_key = METHOD_LABELS[method_label]
@@ -331,9 +325,23 @@ with st.sidebar:
         params["margin_frac"] = st.slider("Margen (%)", 5, 30, 10) / 100.0
 
     elif method_key == "sam_auto":
-        params["points_per_side"] = st.slider("Puntos por lado (grilla)", 4, 16, 8)
-        params["pred_iou_thresh"] = st.slider("Umbral IoU mínimo", 0.70, 0.98, 0.88, step=0.01)
-        params["min_mask_region_area"] = st.slider("Área mínima (px²)", 100, 5000, 500, step=100)
+        st.caption("Ajustes de sensibilidad de detección:")
+        params["points_per_side"] = st.slider(
+            "Puntos por lado (Grilla)", 8, 64, 32, step=8,
+            help="Mayor valor detecta objetos más pequeños y detalles finos."
+        )
+        params["pred_iou_thresh"] = st.slider(
+            "Umbral IoU mínimo", 0.50, 0.98, 0.86, step=0.01,
+            help="Disminuirlo conserva más máscaras detectadas."
+        )
+        params["stability_score_thresh"] = st.slider(
+            "Umbral de Estabilidad", 0.60, 0.99, 0.92, step=0.01,
+            help="Disminuirlo detecta objetos con bordes difusos."
+        )
+        params["min_mask_region_area"] = st.slider(
+            "Área mínima (px²)", 0, 5000, 100, step=50,
+            help="Filtra elementos más pequeños que este área."
+        )
 
     if method_key in SAM_METHODS:
         st.markdown("🤖 **Modelo SAM**")
@@ -438,16 +446,16 @@ with tab_seg:
                     from utils.visualization import overlay_masks, colorize_result
 
                     if method_key in SAM_METHODS:
-                        # Asegurar la presencia del modelo descargándolo automáticamente si no existe
                         valid_ckpt_path = _ensure_sam_checkpoint_by_key(selected_model_key)
                         handler = get_sam_handler(valid_ckpt_path)
                         
                         if method_key == "sam_auto":
                             masks, err = handler.auto_segment(
                                 image_rgb,
-                                points_per_side=params.get("points_per_side", 8),
-                                pred_iou_thresh=params.get("pred_iou_thresh", 0.88),
-                                min_mask_region_area=params.get("min_mask_region_area", 500),
+                                points_per_side=params.get("points_per_side", 32),
+                                pred_iou_thresh=params.get("pred_iou_thresh", 0.86),
+                                stability_score_thresh=params.get("stability_score_thresh", 0.92),
+                                min_mask_region_area=params.get("min_mask_region_area", 100),
                             )
                         else:
                             masks, err = handler.point_segment(
@@ -528,7 +536,7 @@ with tab_compare:
                     elif mkey == "sam_auto":
                         valid_ckpt_path = _ensure_sam_checkpoint_by_key(DEFAULT_MODEL_KEY)
                         handler_c = get_sam_handler(valid_ckpt_path)
-                        masks_c, err_c = handler_c.auto_segment(image_rgb_c, points_per_side=8)
+                        masks_c, err_c = handler_c.auto_segment(image_rgb_c, points_per_side=32)
                         if masks_c:
                             compare_store[label] = overlay_masks(image_rgb_c, masks_c)
                         else:
