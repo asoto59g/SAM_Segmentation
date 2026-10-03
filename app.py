@@ -2,7 +2,7 @@
 app.py
 ------
 Aplicación web de segmentación de imágenes agrícolas / satelitales.
-Integra Lazy Loading, protección anti-OOM, controles de modelo y descargas en PNG/GeoTIFF.
+Integra Lazy Loading, protección anti-OOM, controles de modelo, escalado dinámico y descargas en PNG/GeoTIFF.
 """
 
 from __future__ import annotations
@@ -183,8 +183,24 @@ def safe_run_grabcut(segmenter, image_rgb: np.ndarray, margin_frac: float = 0.1)
 with st.sidebar:
     st.markdown(f"## {APP_TITLE}")
     st.markdown("---")
-    st.markdown("📂 **Imagen de entrada**")
     
+    st.markdown("📏 **Resolución máxima de entrada**")
+    scale_option = st.selectbox(
+        "Escalar imagen a:",
+        options=["1024 px (Recomendado Cloud)", "2048 px", "Original (Sin escalar)", "Personalizado"],
+        index=0,
+        help="Las imágenes satelitales/agrícolas suelen ser enormes. Reducir su tamaño previene errores de memoria."
+    )
+    
+    max_input_dim = None
+    if scale_option == "1024 px (Recomendado Cloud)":
+        max_input_dim = 1024
+    elif scale_option == "2048 px":
+        max_input_dim = 2048
+    elif scale_option == "Personalizado":
+        max_input_dim = st.number_input("Dimensión máxima (px)", min_value=256, max_value=10000, value=1500, step=100)
+    
+    st.markdown("📂 **Imagen de entrada**")
     uploaded = st.file_uploader("Sube una imagen", type=["jpg", "jpeg", "png", "tif", "tiff", "bmp"], label_visibility="collapsed")
     
     if uploaded is not None:
@@ -193,13 +209,17 @@ with st.sidebar:
             from utils.image_io import image_from_bytes
             image_rgb, metadata = image_from_bytes(file_bytes, uploaded.name)
             
-            # Reescalar si la imagen es gigantesca para proteger memoria (OOM)
-            max_input_dim = 1024
             orig_h, orig_w = image_rgb.shape[:2]
-            if max(orig_h, orig_w) > max_input_dim:
-                st.warning(f"Imagen escalada a {max_input_dim}px para proteger la memoria de Streamlit.")
+            
+            # Lógica de reescalado dinámico
+            if max_input_dim is not None and max(orig_h, orig_w) > max_input_dim:
+                if scale_option != "1024 px (Recomendado Cloud)":
+                    st.warning(f"Imagen escalada a {max_input_dim}px. ⚠️ Tamaños muy grandes pueden causar estrangulamiento de CPU (Throttling).")
+                
                 scale_in = max_input_dim / float(max(orig_h, orig_w))
                 image_rgb = np.array(Image.fromarray(image_rgb).resize((int(orig_w * scale_in), int(orig_h * scale_in)), Image.Resampling.LANCZOS))
+            elif max_input_dim is None:
+                st.warning("⚠️ Mantener el tamaño original en imágenes muy grandes probablemente provocará un colapso en la nube al ejecutar SAM.")
                 
             st.session_state["image_rgb"] = image_rgb
             st.session_state["metadata"] = metadata
@@ -215,12 +235,12 @@ with st.sidebar:
     method_label = st.selectbox("Método", options=list(METHOD_LABELS.keys()), index=7, label_visibility="collapsed")
     method_key = METHOD_LABELS[method_label]
 
-    st.markdown("⚙️️ **Parámetros**")
+    st.markdown("⚙ **Parámetros**")
     params: dict = {}
     if method_key == "otsu":
         params["blur_kernel"] = st.slider("Tamaño suavizado (px)", 1, 21, 5, step=2)
     elif method_key == "sam_auto":
-        params["points_per_side"] = st.slider("Puntos por lado", 4, 32, 8, help="Más puntos = más detalle, pero requiere más RAM y CPU.")
+        params["points_per_side"] = st.slider("Puntos por lado", 4, 32, 8, help="Más puntos = más detalle, pero requiere muchísimo más procesamiento de CPU.")
         params["pred_iou_thresh"] = st.slider("Umbral IoU", 0.50, 0.98, 0.88, help="Filtra máscaras de baja confianza.")
         params["min_mask_region_area"] = st.number_input("Área mínima de región (px)", min_value=0, value=500, step=100)
     
@@ -230,7 +250,7 @@ with st.sidebar:
             "Modelo", 
             options=list(SAM_MODEL_CONFIGS.keys()), 
             index=0,
-            help="⚠️ En Streamlit Cloud Free, evita ViT-H o ViT-L para prevenir colapsos por falta de memoria (OOM)."
+            help="⚠️ En Streamlit Cloud Free usa ViT-B. Modelos más grandes causarán Out of Memory (OOM)."
         )
 
 # ---------------------------------------------------------------------------
@@ -287,7 +307,7 @@ with tab_seg:
         run_disabled = (method_key == "sam_click" and len(st.session_state["click_points"]) == 0)
         
         if st.button("▶ Segmentar", type="primary", use_container_width=True, disabled=run_disabled):
-            with st.spinner(f"Procesando con {method_label}…"):
+            with st.spinner(f"Procesando con {method_label}… (Esto puede tardar en Streamlit Cloud)"):
                 try:
                     from utils.visualization import overlay_masks, colorize_result
 
@@ -311,7 +331,6 @@ with tab_seg:
                         else:
                             st.error(err)
                             
-                        # Limpiar instancia explícitamente para proteger la RAM
                         del handler
                         gc.collect()
 
@@ -330,14 +349,10 @@ with tab_seg:
         if st.session_state["result_rgb"] is not None:
             st.image(st.session_state["result_rgb"], use_container_width=True)
             
-            # -------------------------------------------------------------------
-            # BOTONES DE DESCARGA (NUEVO)
-            # -------------------------------------------------------------------
             st.markdown("---")
             st.markdown("### 💾 Descargar Resultados")
             col_d1, col_d2 = st.columns(2)
             
-            # 1. Preparar buffer PNG
             buf_png = io.BytesIO()
             Image.fromarray(st.session_state["result_rgb"]).save(buf_png, format="PNG")
             
@@ -351,7 +366,6 @@ with tab_seg:
                 )
                 
             with col_d2:
-                # 2. Preparar buffer GeoTIFF
                 try:
                     import rasterio
                     from rasterio.io import MemoryFile
