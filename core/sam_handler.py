@@ -2,7 +2,8 @@
 core/sam_handler.py
 -------------------
 Manejo de la inferencia y carga de modelos Segment Anything (SAM).
-Optimizado con torch.no_grad() y control estricto de hilos CPU para evitar throttling en Streamlit Cloud.
+Optimizado con torch.no_grad() y control de hilos de CPU
+para evitar throttling en Streamlit Cloud.
 """
 
 from __future__ import annotations
@@ -10,24 +11,21 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import numpy as np
-import torch
 
-# 1. Variables de entorno antes de cargar librerías C/C++ para controlar hilos
+# Configurar variables de entorno antes de cualquier cálculo
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-# 2. Configuración segura de hilos en PyTorch evitando RuntimeError
+import torch
+import streamlit as st
+
+# Configurar hilos en PyTorch de forma segura
 try:
     torch.set_num_threads(1)
 except Exception:
-    pass
-
-try:
-    torch.set_num_interop_threads(1)
-except RuntimeError:
     pass
 
 try:
@@ -41,10 +39,6 @@ class SAMHandler:
     def __init__(self, checkpoint_path: str, model_type: str = "vit_b"):
         """
         Inicializa el handler de SAM.
-        
-        Args:
-            checkpoint_path: Ruta al archivo .pth del modelo.
-            model_type: Tipo de modelo ("vit_b", "vit_l", "vit_h"). Por defecto "vit_b".
         """
         self.checkpoint_path = checkpoint_path
         self.model_type = model_type
@@ -54,7 +48,7 @@ class SAMHandler:
         self.predictor = None
 
     def status_info(self) -> dict:
-        """Retorna información sobre la disponibilidad de SAM y el checkpoint."""
+        """Retorna información sobre la disponibilidad de SAM."""
         checkpoint_exists = Path(self.checkpoint_path).exists()
         file_size_ok = (
             checkpoint_exists and Path(self.checkpoint_path).stat().st_size > 50_000_000
@@ -80,7 +74,7 @@ class SAMHandler:
         try:
             self.sam = sam_model_registry[self.model_type](checkpoint=self.checkpoint_path)
             self.sam.to(device=self.device)
-            self.sam.eval()  # Modo evaluación
+            self.sam.eval()
             self.predictor = SamPredictor(self.sam)
             return None
         except Exception as exc:
@@ -89,7 +83,7 @@ class SAMHandler:
     def auto_segment(
         self,
         image_rgb: np.ndarray,
-        points_per_side: int = 8,  # Ajustado a 8 para minimizar consumo de CPU
+        points_per_side: int = 8,
         pred_iou_thresh: float = 0.88,
         min_mask_region_area: int = 500,
     ) -> tuple[list[dict] | None, str | None]:
@@ -99,7 +93,7 @@ class SAMHandler:
             return None, err
 
         try:
-            with torch.no_grad():  # Desactiva autodiferenciación para evitar fugas de memoria
+            with torch.no_grad():
                 generator = SamAutomaticMaskGenerator(
                     model=self.sam,
                     points_per_side=points_per_side,
@@ -117,7 +111,7 @@ class SAMHandler:
         points: list[tuple[int, int]],
         labels: list[int],
     ) -> tuple[list[dict] | None, str | None]:
-        """Genera máscaras a partir de puntos (clics) interactivos."""
+        """Genera máscaras a partir de clics interactivos liberando gradientes de RAM."""
         err = self._load_model()
         if err:
             return None, err
@@ -126,7 +120,7 @@ class SAMHandler:
             return None, "No se proporcionaron puntos de interés."
 
         try:
-            with torch.no_grad():  # Desactiva autodiferenciación para evitar fugas de memoria
+            with torch.no_grad():
                 self.predictor.set_image(image_rgb)
                 input_points = np.array(points)
                 input_labels = np.array(labels)

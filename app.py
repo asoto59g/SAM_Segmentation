@@ -27,7 +27,7 @@ import numpy as np
 from PIL import Image
 import streamlit as st
 
-# Configuración de la página DEBE ser la primera instrucción de Streamlit
+# Configuración de la página
 st.set_page_config(
     page_title="Segmentación Agrícola",
     page_icon="🌿",
@@ -35,10 +35,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Ajuste de path para módulos locales
-_APP_DIR = Path(__file__).parent.resolve()
-if str(_APP_DIR) not in sys.path:
-    sys.path.insert(0, str(_APP_DIR))
+# Ajuste absoluto de path para módulos locales en Streamlit Cloud
+ROOT_DIR = Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 APP_TITLE = "🌾 Segmentación de Imágenes Agrícolas"
 APP_ICON = "🌿"
@@ -49,7 +49,7 @@ APP_ICON = "🌿"
 _LOCAL_MODELS_DIR = Path(
     r"C:\Users\AlejandroSotoBarquer\OneDrive - ABC Geomática Agricola SRL\Documentos\ABC_Gis_Activos\01_Clientes\2026\Segmentacion Imagenes\models"
 )
-_PROJECT_MODELS_DIR = _APP_DIR / "models"
+_PROJECT_MODELS_DIR = ROOT_DIR / "models"
 _CLOUD_MODELS_DIR = Path("/tmp/sam_models")
 
 if _LOCAL_MODELS_DIR.exists():
@@ -82,7 +82,6 @@ SAM_MODEL_CONFIGS = {
 
 DEFAULT_MODEL_KEY = "ViT-B (Base - Rápido)"
 
-
 def get_model_type_from_filename(checkpoint_path: str) -> str:
     """Detecta automáticamente el tipo de arquitectura SAM según el nombre del archivo."""
     name = Path(checkpoint_path).name.lower()
@@ -92,7 +91,6 @@ def get_model_type_from_filename(checkpoint_path: str) -> str:
         return "vit_l"
     else:
         return "vit_b"
-
 
 def download_checkpoint_with_progress(url: str, dest_path: Path) -> None:
     """Descarga un archivo con una barra de progreso nativa en Streamlit."""
@@ -113,7 +111,6 @@ def download_checkpoint_with_progress(url: str, dest_path: Path) -> None:
     progress_bar.empty()
     status_text.empty()
 
-
 def _ensure_sam_checkpoint_by_key(model_key: str) -> str:
     """Garantiza la presencia del checkpoint SAM seleccionado, descargándolo si no existe."""
     config = SAM_MODEL_CONFIGS[model_key]
@@ -125,10 +122,10 @@ def _ensure_sam_checkpoint_by_key(model_key: str) -> str:
 
     # Intentar descargar automáticamente desde la URL directa
     try:
-        st.info(f"⚡ Inicializando descarga automática de {model_key}...")
+        st.info(f"⚡ Inicializando descarga automática de {model_key} en Streamlit Cloud...")
         download_checkpoint_with_progress(config["url"], target_path)
         if target_path.exists() and target_path.stat().st_size > 50_000_000:
-            st.success("✅ Descarga del modelo SAM completada con éxito.")
+            st.success("✅ Descarga completada con éxito.")
             return str(target_path)
         else:
             raise RuntimeError("El archivo descargado no es válido o está incompleto.")
@@ -136,7 +133,6 @@ def _ensure_sam_checkpoint_by_key(model_key: str) -> str:
         st.error(f"❌ Error al descargar el modelo {model_key}: {exc}")
         st.code(traceback.format_exc())
         st.stop()
-
 
 # ---------------------------------------------------------------------------
 # Mapeos de Métodos
@@ -179,7 +175,6 @@ COMPARE_METHOD_MAP: dict[str, str] = {
     "8 · SAM – Automático":"sam_auto",
 }
 
-
 def _init_state() -> None:
     defaults = {
         "image_rgb":          None,
@@ -200,7 +195,6 @@ def _init_state() -> None:
 
 _init_state()
 
-
 @st.cache_resource(show_spinner=False)
 def load_sam_handler_instance(checkpoint_path: str, model_type: str):
     import torch
@@ -215,7 +209,6 @@ def load_sam_handler_instance(checkpoint_path: str, model_type: str):
     except TypeError:
         return SAMHandler(checkpoint_path=checkpoint_path)
 
-
 def get_sam_handler(checkpoint_path: str):
     """Wrapper para obtener el handler de SAM e invalidar caché si cambia de archivo."""
     model_type = get_model_type_from_filename(checkpoint_path)
@@ -226,19 +219,16 @@ def get_sam_handler(checkpoint_path: str):
         
     return load_sam_handler_instance(checkpoint_path, model_type)
 
-
 @st.cache_resource(show_spinner=False)
 def get_segmenter():
     from core.segmentation import ClassicSegmenter
     return ClassicSegmenter()
-
 
 def _build_filename(ext: str) -> str:
     fname = st.session_state.get("filename") or "imagen"
     stem  = Path(fname).stem
     mkey  = st.session_state.get("result_method") or "resultado"
     return f"{stem}_{mkey}.{ext}"
-
 
 def safe_run_grabcut(segmenter, image_rgb: np.ndarray, margin_frac: float = 0.1) -> np.ndarray:
     import cv2
@@ -438,6 +428,7 @@ with tab_seg:
                     from utils.visualization import overlay_masks, colorize_result
 
                     if method_key in SAM_METHODS:
+                        # Asegurar la presencia del modelo descargándolo automáticamente si no existe
                         valid_ckpt_path = _ensure_sam_checkpoint_by_key(selected_model_key)
                         handler = get_sam_handler(valid_ckpt_path)
                         
