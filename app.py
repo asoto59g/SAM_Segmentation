@@ -2,7 +2,7 @@
 app.py
 ------
 Aplicación web de segmentación de imágenes agrícolas / satelitales.
-Integra Lazy Loading, protección anti-OOM y descarga oficial para Streamlit Cloud.
+Integra Lazy Loading, protección anti-OOM, controles de modelo y descargas en PNG/GeoTIFF.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import sys
 import gc
 import urllib.request
 import traceback
+import io
 from pathlib import Path
 
 # 1. Configuración de recursos para evitar Throttling en Streamlit Cloud
@@ -211,20 +212,26 @@ with st.sidebar:
             st.error(f"Error cargando imagen: {e}")
 
     st.markdown("🔬 **Método de segmentación**")
-    method_label = st.selectbox("Método", options=list(METHOD_LABELS.keys()), index=4, label_visibility="collapsed")
+    method_label = st.selectbox("Método", options=list(METHOD_LABELS.keys()), index=7, label_visibility="collapsed")
     method_key = METHOD_LABELS[method_label]
 
-    st.markdown("⚙️ **Parámetros**")
+    st.markdown("⚙️️ **Parámetros**")
     params: dict = {}
     if method_key == "otsu":
         params["blur_kernel"] = st.slider("Tamaño suavizado (px)", 1, 21, 5, step=2)
     elif method_key == "sam_auto":
-        params["points_per_side"] = st.slider("Puntos por lado", 4, 16, 8)
-        params["pred_iou_thresh"] = st.slider("Umbral IoU", 0.70, 0.98, 0.88)
+        params["points_per_side"] = st.slider("Puntos por lado", 4, 32, 8, help="Más puntos = más detalle, pero requiere más RAM y CPU.")
+        params["pred_iou_thresh"] = st.slider("Umbral IoU", 0.50, 0.98, 0.88, help="Filtra máscaras de baja confianza.")
+        params["min_mask_region_area"] = st.number_input("Área mínima de región (px)", min_value=0, value=500, step=100)
     
     if method_key in SAM_METHODS:
         st.markdown("🤖 **Arquitectura SAM**")
-        selected_model_key = st.selectbox("Modelo", options=list(SAM_MODEL_CONFIGS.keys()), index=0)
+        selected_model_key = st.selectbox(
+            "Modelo", 
+            options=list(SAM_MODEL_CONFIGS.keys()), 
+            index=0,
+            help="⚠️ En Streamlit Cloud Free, evita ViT-H o ViT-L para prevenir colapsos por falta de memoria (OOM)."
+        )
 
 # ---------------------------------------------------------------------------
 # INTERFAZ PRINCIPAL
@@ -285,13 +292,17 @@ with tab_seg:
                     from utils.visualization import overlay_masks, colorize_result
 
                     if method_key in SAM_METHODS:
-                        # Descarga diferida: Solo descarga y carga en memoria si el usuario presiona "Segmentar"
                         valid_ckpt_path = _ensure_sam_checkpoint_by_key(selected_model_key)
                         cfg = SAM_MODEL_CONFIGS[selected_model_key]
                         handler = get_sam_handler(valid_ckpt_path, cfg["type"])
                         
                         if method_key == "sam_auto":
-                            masks, err = handler.auto_segment(image_rgb, points_per_side=params.get("points_per_side", 8))
+                            masks, err = handler.auto_segment(
+                                image_rgb, 
+                                points_per_side=params.get("points_per_side", 8),
+                                pred_iou_thresh=params.get("pred_iou_thresh", 0.88),
+                                min_mask_region_area=params.get("min_mask_region_area", 500)
+                            )
                         else:
                             masks, err = handler.point_segment(image_rgb, st.session_state["click_points"], st.session_state["click_labels"])
 
@@ -318,3 +329,67 @@ with tab_seg:
 
         if st.session_state["result_rgb"] is not None:
             st.image(st.session_state["result_rgb"], use_container_width=True)
+            
+            # -------------------------------------------------------------------
+            # BOTONES DE DESCARGA (NUEVO)
+            # -------------------------------------------------------------------
+            st.markdown("---")
+            st.markdown("### 💾 Descargar Resultados")
+            col_d1, col_d2 = st.columns(2)
+            
+            # 1. Preparar buffer PNG
+            buf_png = io.BytesIO()
+            Image.fromarray(st.session_state["result_rgb"]).save(buf_png, format="PNG")
+            
+            with col_d1:
+                st.download_button(
+                    label="⬇️ Descargar PNG",
+                    data=buf_png.getvalue(),
+                    file_name=f"seg_{st.session_state['filename'].split('.')[0]}.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+                
+            with col_d2:
+                # 2. Preparar buffer GeoTIFF
+                try:
+                    import rasterio
+                    from rasterio.io import MemoryFile
+                    
+                    meta = st.session_state.get("metadata", {})
+                    transform = meta.get("transform") if isinstance(meta, dict) else None
+                    crs = meta.get("crs") if isinstance(meta, dict) else None
+                    
+                    img_res = st.session_state["result_rgb"]
+                    h, w = img_res.shape[:2]
+                    channels = img_res.shape[2] if len(img_res.shape) == 3 else 1
+                    
+                    with MemoryFile() as memfile:
+                        kwargs = {
+                            'driver': 'GTiff',
+                            'height': h,
+                            'width': w,
+                            'count': channels,
+                            'dtype': img_res.dtype,
+                        }
+                        if transform: kwargs['transform'] = transform
+                        if crs: kwargs['crs'] = crs
+                        
+                        with memfile.open(**kwargs) as dataset:
+                            if channels == 1:
+                                dataset.write(img_res, 1)
+                            else:
+                                for i in range(channels):
+                                    dataset.write(img_res[:, :, i], i + 1)
+                                    
+                        tif_bytes = memfile.read()
+                        
+                    st.download_button(
+                        label="⬇️ Descargar GeoTIFF",
+                        data=tif_bytes,
+                        file_name=f"seg_{st.session_state['filename'].split('.')[0]}.tif",
+                        mime="image/tiff",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.warning(f"No se pudo habilitar GeoTIFF: {e}")
