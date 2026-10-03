@@ -8,6 +8,6 @@ opencv-python-headless
 pillow
 numpy<2.0.0
 streamlit
-streamlit-image-coordinates
+streamlit-image-coordinates>=0.3.0
 gdown
 rasterio

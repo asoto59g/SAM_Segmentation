@@ -59,12 +59,17 @@ def overlay_masks(
     Superpone las máscaras SAM sobre la imagen original con colores
     semitransparentes.
 
+    Optimización: usa el 'bbox' [x, y, w, h] que provee SAM para limitar
+    el blending al rectángulo de la máscara, en lugar de toda la imagen.
+
     Parameters
     ----------
     image_rgb : np.ndarray
         Imagen base uint8 (H, W, 3) RGB.
     masks : list[dict]
-        Lista de dicts SAM con clave ``'segmentation'`` (bool array H×W).
+        Lista de dicts SAM con claves:
+        - ``'segmentation'``: bool array H×W
+        - ``'bbox'``: [x, y, w, h] (opcional, pero presente en SAM)
     alpha : float
         Opacidad del color de relleno (0=transparente, 1=sólido).
     max_masks : int
@@ -81,9 +86,7 @@ def overlay_masks(
     result = image_rgb.astype(np.float32)
     n_palette = len(_AGRI_PALETTE)
 
-    # Usar solo hasta max_masks para no saturar la imagen
     visible_masks = masks[:max_masks]
-
     rng = np.random.default_rng(42)
 
     for idx, mask_data in enumerate(visible_masks):
@@ -95,15 +98,33 @@ def overlay_masks(
         if not seg_bool.any():
             continue
 
-        # Alternar entre paleta predefinida y colores aleatorios
+        # Usar bbox si está disponible para limitar la operación
+        bbox = mask_data.get("bbox")
+        if bbox is not None:
+            x, y, w, h = map(int, bbox)
+            # Recortar a los límites de la imagen
+            x = max(0, x)
+            y = max(0, y)
+            w = min(w, result.shape[1] - x)
+            h = min(h, result.shape[0] - y)
+            if w <= 0 or h <= 0:
+                continue
+            roi_bool = seg_bool[y:y+h, x:x+w]
+            if not roi_bool.any():
+                continue
+            roi = result[y:y+h, x:x+w]
+        else:
+            # Fallback: imagen completa (caso legacy)
+            roi_bool = seg_bool
+            roi = result
+
         if idx < n_palette:
             color = _AGRI_PALETTE[idx].astype(np.float32)
         else:
             color = rng.integers(64, 230, size=3, dtype=np.uint8).astype(np.float32)
 
-        result[seg_bool] = (
-            (1.0 - alpha) * result[seg_bool] + alpha * color
-        )
+        # Blending vectorizado solo en la ROI
+        roi[roi_bool] = (1.0 - alpha) * roi[roi_bool] + alpha * color
 
     return result.clip(0, 255).astype(np.uint8)
 

@@ -7,6 +7,7 @@ Soporta arquitecturas ViT-B, ViT-L y ViT-H dinámicamente según el archivo .pth
 
 from __future__ import annotations
 
+import hashlib
 import traceback
 from pathlib import Path
 import numpy as np
@@ -21,6 +22,15 @@ try:
     _SAM_AVAILABLE = True
 except ImportError:
     _SAM_AVAILABLE = False
+
+
+def _image_fingerprint(image_rgb: np.ndarray) -> str:
+    """Calcula una huella ligera de la imagen para detectar cambios.
+    Usa shape + dtype + hash de una submuestra (cada 16 px)."""
+    h, w = image_rgb.shape[:2]
+    # Submuestreo rápido: cada 16 píxeles, canal R
+    sample = image_rgb[::16, ::16, 0]
+    return hashlib.blake2b(sample.tobytes(), digest_size=8).hexdigest()
 
 
 class SAMHandler:
@@ -53,6 +63,8 @@ class SAMHandler:
         self.sam = sam_model_registry[self.model_type](checkpoint=self.checkpoint_path)
         self.sam.to(device=self.device)
         self.predictor = SamPredictor(self.sam)
+        # Cache de embedding de imagen
+        self._cached_image_fp: str | None = None
 
     def auto_segment(
         self,
@@ -89,12 +101,17 @@ class SAMHandler:
     ) -> tuple[list[dict] | None, str | None]:
         """
         Genera segmentación basada en clics/puntos (prompting).
+        Reutiliza el embedding si la imagen no cambió.
         """
         if not points:
             return None, "No se proporcionaron puntos para la segmentación."
 
         try:
-            self.predictor.set_image(image_rgb)
+            # Solo recalcular embedding si la imagen cambió
+            fp = _image_fingerprint(image_rgb)
+            if fp != self._cached_image_fp:
+                self.predictor.set_image(image_rgb)
+                self._cached_image_fp = fp
 
             input_points = np.array(points, dtype=np.float32)
             input_labels = np.array(labels, dtype=np.int32)
