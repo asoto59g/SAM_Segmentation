@@ -1,0 +1,180 @@
+
+[     UTC     ] Logs for samsegmentation-e9fgshmnumuddnat6w9alu.streamlit.app/
+────────────────────────────────────────────────────────────────────────────────────────
+[22:51:09] 🚀 Starting up repository: 'sam_segmentation', branch: 'main', main module: 'app.py'
+[22:51:09] 🐙 Cloning repository...
+[22:51:09] 🐙 Cloning into '/mount/src/sam_segmentation'...
+
+[22:51:09] 🐙 Cloned repository!
+[22:51:09] 🐙 Pulling code changes from Github...
+[22:51:10] 📦 Processing dependencies...
+
+──────────────────────────────────────── uv ───────────────────────────────────────────
+
+Using uv pip install.
+Using Python 3.14.7 environment at /home/adminuser/venv
+Resolved 68 packages in 3.69s
+Prepared 68 packages in 5m 19s
+Installed 68 packages in 871ms
+ + affine==3.0.1
+ + altair==6.3.0
+ + anyio==4.15.1
+ + attrs==26.1.0
+ + beautifulsoup4==4.15.0
+ +[2026-10-02 22:56:34.555338]  certifi==2022.12.7
+ + charset-normalizer==2.1.1
+ + click==8.5.0
+ + click-plugins==1.1.1.2
+ + cligj==0.7.2
+ + cloudpickle[2026-10-02 22:56:34.555593] ==3.1.2
+ + filelock==3.32.3
+ + fsspec==2026.7.0
+ + gdown==6.4.1
+ + h11==0.16.0[2026-10-02 22:56:34.555836] 
+ + httptools==0.8.0
+ + idna==3.4
+ +[2026-10-02 22:56:34.556808]  imageio==2.38.0
+ + itsdangerous==2.2.0
+ + jinja2==3.1.6[2026-10-02 22:56:34.557005] 
+ + joblib==1.6.0
+ + jsonschema==4.26.0
+ + jsonschema-specifications==2025.9.1
+ + lazy-loader==0.6
+ + markupsafe==3.0.3[2026-10-02 22:56:34.557242] 
+ + mpmath==1.3.0
+ + narwhals==2.26.0
+ + networkx==3.6.1
+ + numpy[2026-10-02 22:56:34.557454] ==1.26.4
+ + opencv-python-headless==4.11.0.86
+ + packaging==24.1
+ + pandas==2.3.3
+ + pillow[2026-10-02 22:56:34.557635] ==12.3.0
+ + protobuf==7.36.2
+ + pyarrow==25.0.1
+ + pydeck==0.9.3[2026-10-02 22:56:34.557798] 
+ + pyparsing==3.3.3
+ + pysocks==1.7.1
+ + python-dateutil==2.9.0.post0
+ + python-multipart==0.0.32[2026-10-02 22:56:34.557970] 
+ + pytz==2026.4
+ + rasterio==1.4.4
+ + referencing==0.37.0
+ + requests[2026-10-02 22:56:34.558145] ==2.28.1
+ + rpds-py==2026.6.3
+ + scikit-image==0.26.0
+ + scikit-learn==1.9.1
+ + scipy[2026-10-02 22:56:34.558349] ==1.17.1
+ + segment-anything==1.0 (from git+https://github.com/facebookresearch/segment-anything.git@dca509fe793f601edb92606367a655c15ac00fdf)
+ + setuptools==78.1.0
+ + six==1.17.0
+ + [2026-10-02 22:56:34.558546] soupsieve==2.10
+ + starlette==1.7.0
+ +[2026-10-02 22:56:34.558723]  streamlit==1.65.0
+ + streamlit-image-coordinates==0.4.1
+ + sympy==[2026-10-02 22:56:34.558883] 1.14.0
+ + threadpoolctl==3.7.0
+ +[2026-10-02 22:56:34.559051]  tifffile==2026.3.3
+ + toml==0.10.2
+ + torch==2.14.1+cpu
+ + torchvision[2026-10-02 22:56:34.559416] ==0.29.1+cpu
+ + tqdm==[2026-10-02 22:56:34.559598] 4.66.5
+ + typing-extensions==4.16.0[2026-10-02 22:56:34.559770] 
+ + tzdata==2026.4
+ + [2026-10-02 22:56:34.559937] urllib3==1.26.13
+ + uvicorn==0.54.0[2026-10-02 22:56:34.560121] 
+ + watchdog==6.0.0
+ + [2026-10-02 22:56:34.560323] websockets==17.1
+Checking if Streamlit is installed
+Found Streamlit version 1.65.0 in the environment
+Detected pyarrow 25.0.1 (known segfault, apache/arrow#50471). Replacing with pyarrow<25.
+Using uv pip install.
+Using Python 3.14.7 environment at /home/adminuser/venv
+Resolved 1 package in 54ms
+Prepared 1 package in 739ms
+Uninstalled 1 package in 24ms
+Installed 1 package in 28ms
+ - pyarrow==25.0.1
+ +[2026-10-02 22:56:38.125198]  pyarrow==24.0.0
+Installing rich for an improved exception logging
+Using uv pip install.
+Using Python 3.14.7 environment at /home/adminuser/venv
+Resolved 4 packages in 128ms
+Prepared 4 packages in 124ms
+Installed 4 packages in 18ms
+ + markdown-it-py==4.2.0
+ + mdurl[2026-10-02 22:56:39.579549] ==0.1.2
+ + pygments==2.21.0
+ + rich==15.0.0
+
+────────────────────────────────────────────────────────────────────────────────────────
+
+[22:56:40] 🐍 Python dependencies were installed from /mount/src/sam_segmentation/requirements.txt using uv.
+Check if streamlit is installed
+Streamlit is already installed
+[22:56:41] 📦 Processed dependencies!
+2026-10-02 22:56:43.523 Uvicorn server started on :::8501
+
+
+
+[00:54:53] 🐙 Pulling code changes from Github...
+[00:54:54] 📦 Processing dependencies...
+[00:54:54] 📦 Processed dependencies!
+[00:54:55] 🔄 Updated app!
+[01:07:16] 🐙 Pulling code changes from Github...
+[01:07:16] 📦 Processing dependencies...
+[01:07:16] 📦 Processed dependencies!
+[01:07:18] 🔄 Updated app!
+[01:27:47] 🐙 Pulling code changes from Github...
+[01:27:47] 📦 Processing dependencies...
+[01:27:47] 📦 Processed dependencies!
+[01:27:49] 🔄 Updated app!
+[01:31:25] 🐙 Pulling code changes from Github...
+[01:31:26] 📦 Processing dependencies...
+[01:31:26] 📦 Processed dependencies!
+[01:31:27] 🔄 Updated app!
+[01:34:32] 🐙 Pulling code changes from Github...
+[01:34:32] 📦 Processing dependencies...
+[01:34:32] 📦 Processed dependencies!
+[01:34:34] 🔄 Updated app!
+[02:44:01] 🐙 Pulling code changes from Github...
+[02:44:02] 📦 Processing dependencies...
+[02:44:02] 📦 Processed dependencies!
+[02:44:03] 🔄 Updated app!
+[04:45:37] 🐙 Pulling code changes from Github...
+[04:45:38] 📦 Processing dependencies...
+
+──────────────────────────────────────── uv ───────────────────────────────────────────
+
+Using uv pip install.
+Using Python 3.14.7 environment at /home/adminuser/venv
+Resolved 68 packages in 1.58s
+Prepared 1 package in 0.90ms
+Uninstalled 1 package in 22ms
+Installed 1 package in 22ms
+ - pyarrow==24.0.0
+ [2026-10-03 04:45:40.246126] + pyarrow==25.0.1
+Checking if Streamlit is installed
+Found Streamlit version 1.65.0 in the environment
+Detected pyarrow 25.0.1 (known segfault, apache/arrow#50471). Replacing with pyarrow<25.
+Using uv pip install.
+Using Python 3.14.7 environment at /home/adminuser/venv
+Resolved 1 package in 5ms
+Uninstalled [2026-10-03 04:45:42.130775] 1 package in 31ms
+Installed 1 package in 30ms
+ - pyarrow==[2026-10-03 04:45:42.161389] 25.0.1
+ + pyarrow==24.0.0
+Installing rich for an improved exception logging
+Using uv pip install.
+Using Python 3.14.7 environment at /home/adminuser/venv
+Audited 1 package in 2ms
+
+────────────────────────────────────────────────────────────────────────────────────────
+
+[04:45:43] 🐍 Python dependencies were installed from /mount/src/sam_segmentation/requirements.txt using uv.
+[04:45:43] 📦 Processed dependencies!
+  Stopping...
+2026-10-03 04:45:46.869 Uvicorn server started on :::8501
+
+
+
+[04:45:47] 🔄 Updated app!

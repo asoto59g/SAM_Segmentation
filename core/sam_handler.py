@@ -2,12 +2,12 @@
 core/sam_handler.py
 -------------------
 Manejo de la inferencia y carga de modelos Segment Anything (SAM).
-Optimizado con torch.no_grad() y control de hilos de CPU
-para evitar throttling en Streamlit Cloud.
+Optimizado para bajo consumo de memoria RAM y CPU en la nube.
 """
 
 from __future__ import annotations
 
+import gc
 import os
 from pathlib import Path
 import numpy as np
@@ -20,9 +20,8 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import torch
-import streamlit as st
 
-# Configurar hilos en PyTorch de forma segura
+# Limitar hilos en PyTorch de forma segura para evitar throttling
 try:
     torch.set_num_threads(1)
 except Exception:
@@ -34,12 +33,8 @@ try:
 except ImportError:
     _SAM_INSTALLED = False
 
-
 class SAMHandler:
     def __init__(self, checkpoint_path: str, model_type: str = "vit_b"):
-        """
-        Inicializa el handler de SAM.
-        """
         self.checkpoint_path = checkpoint_path
         self.model_type = model_type
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -47,21 +42,7 @@ class SAMHandler:
         self.mask_generator = None
         self.predictor = None
 
-    def status_info(self) -> dict:
-        """Retorna información sobre la disponibilidad de SAM."""
-        checkpoint_exists = Path(self.checkpoint_path).exists()
-        file_size_ok = (
-            checkpoint_exists and Path(self.checkpoint_path).stat().st_size > 50_000_000
-        )
-        return {
-            "sam_installed": _SAM_INSTALLED,
-            "checkpoint_found": file_size_ok,
-            "model_loaded": self.sam is not None,
-            "device": self.device,
-        }
-
     def _load_model(self) -> str | None:
-        """Carga los pesos del modelo en memoria si no están cargados."""
         if not _SAM_INSTALLED:
             return "La librería 'segment-anything' no está instalada."
 
@@ -83,17 +64,16 @@ class SAMHandler:
     def auto_segment(
         self,
         image_rgb: np.ndarray,
-        points_per_side: int = 8,
+        points_per_side: int = 8,  # Mantenido bajo para proteger CPU
         pred_iou_thresh: float = 0.88,
         min_mask_region_area: int = 500,
     ) -> tuple[list[dict] | None, str | None]:
-        """Genera máscaras automáticas en toda la imagen liberando gradientes de RAM."""
         err = self._load_model()
         if err:
             return None, err
 
         try:
-            with torch.no_grad():
+            with torch.no_grad(): # Liberar memoria de gradientes
                 generator = SamAutomaticMaskGenerator(
                     model=self.sam,
                     points_per_side=points_per_side,
@@ -101,8 +81,11 @@ class SAMHandler:
                     min_mask_region_area=min_mask_region_area,
                 )
                 masks = generator.generate(image_rgb)
+            
+            gc.collect() # Limpieza forzada de RAM
             return masks, None
         except Exception as exc:
+            gc.collect()
             return None, f"Error durante segmentación automática: {exc}"
 
     def point_segment(
@@ -111,7 +94,6 @@ class SAMHandler:
         points: list[tuple[int, int]],
         labels: list[int],
     ) -> tuple[list[dict] | None, str | None]:
-        """Genera máscaras a partir de clics interactivos liberando gradientes de RAM."""
         err = self._load_model()
         if err:
             return None, err
@@ -120,7 +102,7 @@ class SAMHandler:
             return None, "No se proporcionaron puntos de interés."
 
         try:
-            with torch.no_grad():
+            with torch.no_grad(): # Liberar memoria de gradientes
                 self.predictor.set_image(image_rgb)
                 input_points = np.array(points)
                 input_labels = np.array(labels)
@@ -133,8 +115,10 @@ class SAMHandler:
 
             best_idx = np.argmax(scores)
             selected_mask = masks_raw[best_idx]
-
             formatted_masks = [{"segmentation": selected_mask, "area": np.sum(selected_mask)}]
+            
+            gc.collect()
             return formatted_masks, None
         except Exception as exc:
+            gc.collect()
             return None, f"Error durante segmentación por puntos: {exc}"
