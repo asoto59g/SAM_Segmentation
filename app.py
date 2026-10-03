@@ -3,33 +3,31 @@ app.py
 ------
 App web de segmentación de imágenes agrícolas / satelitales.
 Construida con Streamlit + PyTorch + SAM.
-Soporta descarga automática de modelos SAM (ViT-B, ViT-L, ViT-H) en entorno local y nube,
-así como el ajuste interactivo de todos sus parámetros con protección de memoria RAM.
+Soporta selección dinámica de modelos SAM (ViT-B, ViT-L, ViT-H) en entorno local y nube.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import gc
-import urllib.request
+import threading as _threading
 import traceback
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# 1. Configuración de recursos del sistema (EVITA THROTTLING EN CLOUD / CPU)
+# 1. Configuración de recursos del sistema (EVITA THROTTLING EN CLOUD)
 # ---------------------------------------------------------------------------
-os.environ["OMP_NUM_THREADS"] = "2"
-os.environ["MKL_NUM_THREADS"] = "2"
-os.environ["OPENBLAS_NUM_THREADS"] = "2"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
-os.environ["NUMEXPR_NUM_THREADS"] = "2"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import numpy as np
 from PIL import Image
 import streamlit as st
 
-# Configuración de la página
+# La configuración de página DEBE ser la primera instrucción de Streamlit
 st.set_page_config(
     page_title="Segmentación Agrícola",
     page_icon="🌿",
@@ -54,6 +52,7 @@ _LOCAL_MODELS_DIR = Path(
 _PROJECT_MODELS_DIR = _APP_DIR / "models"
 _CLOUD_MODELS_DIR = Path("/tmp/sam_models")
 
+# Determinar el directorio de modelos activo
 if _LOCAL_MODELS_DIR.exists():
     MODELS_DIR = _LOCAL_MODELS_DIR
 elif _PROJECT_MODELS_DIR.exists():
@@ -61,30 +60,13 @@ elif _PROJECT_MODELS_DIR.exists():
 else:
     MODELS_DIR = _CLOUD_MODELS_DIR
 
-MODELS_DIR.mkdir(parents=True, exist_ok=True)
-
-SAM_MODEL_CONFIGS = {
-    "ViT-B (Base - Rápido)": {
-        "filename": "sam_vit_b_01ec64.pth",
-        "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-        "type": "vit_b",
-    },
-    "ViT-L (Large - Balanceado)": {
-        "filename": "sam_vit_l_0b3195.pth",
-        "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-        "type": "vit_l",
-    },
-    "ViT-H (Huge - Alta Precisión)": {
-        "filename": "sam_vit_h_4b8939.pth",
-        "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-        "type": "vit_h",
-    },
-}
-
-DEFAULT_MODEL_KEY = "ViT-B (Base - Rápido)"
+_SAM_GDRIVE_FILE_ID = "1Uj9-Shntka1a3k4e49ZFbHHwDV_dC2_d"
+_DEFAULT_SAM_FILENAME = "sam_vit_b_01ec64.pth"
+DEFAULT_SAM_CHECKPOINT = str(MODELS_DIR / _DEFAULT_SAM_FILENAME)
 
 
 def get_model_type_from_filename(checkpoint_path: str) -> str:
+    """Detecta automáticamente el tipo de arquitectura SAM según el nombre del archivo."""
     name = Path(checkpoint_path).name.lower()
     if "vit_h" in name:
         return "vit_h"
@@ -94,44 +76,38 @@ def get_model_type_from_filename(checkpoint_path: str) -> str:
         return "vit_b"
 
 
-def download_checkpoint_with_progress(url: str, dest_path: Path) -> None:
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+def _ensure_sam_checkpoint(target_path: str) -> str:
+    """Descarga el checkpoint SAM predeterminado desde Google Drive si no existe en disco."""
+    checkpoint_path = Path(target_path)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _reporthook(block_num, block_size, total_size):
-        downloaded = block_num * block_size
-        if total_size > 0:
-            percent = min(1.0, downloaded / total_size)
-            dl_mb = downloaded / (1024 * 1024)
-            tot_mb = total_size / (1024 * 1024)
-            progress_bar.progress(percent)
-            status_text.text(f"📥 Descargando modelo SAM: {dl_mb:.1f} MB / {tot_mb:.1f} MB ({percent*100:.0f}%)")
+    if checkpoint_path.exists() and checkpoint_path.stat().st_size > 50_000_000:
+        st.session_state["sam_download_error"] = None
+        return str(checkpoint_path)
 
-    urllib.request.urlretrieve(url, str(dest_path), reporthook=_reporthook)
-    progress_bar.empty()
-    status_text.empty()
-
-
-def _ensure_sam_checkpoint_by_key(model_key: str) -> str:
-    config = SAM_MODEL_CONFIGS[model_key]
-    target_path = MODELS_DIR / config["filename"]
-
-    if target_path.exists() and target_path.stat().st_size > 50_000_000:
-        return str(target_path)
+    st.session_state["sam_download_error"] = None
 
     try:
-        st.info(f"⚡ Inicializando descarga automática de {model_key} en Streamlit Cloud...")
-        download_checkpoint_with_progress(config["url"], target_path)
-        if target_path.exists() and target_path.stat().st_size > 50_000_000:
-            st.success("✅ Descarga del modelo SAM completada con éxito.")
-            return str(target_path)
-        else:
-            raise RuntimeError("El archivo descargado no es válido o está incompleto.")
-    except Exception as exc:
-        st.error(f"❌ Error al descargar el modelo {model_key}: {exc}")
-        st.code(traceback.format_exc())
-        st.stop()
+        import gdown
+        url = f"https://drive.google.com/uc?id={_SAM_GDRIVE_FILE_ID}"
+        result = gdown.download(url, str(checkpoint_path), quiet=False, fuzzy=True)
+
+        if result is None:
+            st.session_state["sam_download_error"] = (
+                "gdown retornó None. Asegúrate de que el enlace de Drive sea público."
+            )
+        elif checkpoint_path.exists() and checkpoint_path.stat().st_size < 50_000_000:
+            mb = checkpoint_path.stat().st_size // 1024 // 1024
+            st.session_state["sam_download_error"] = (
+                f"Descarga incompleta: {mb} MB obtenidos."
+            )
+
+    except Exception:
+        st.session_state["sam_download_error"] = (
+            f"Error en descarga:\n{traceback.format_exc()}"
+        )
+
+    return str(checkpoint_path)
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +164,6 @@ def _init_state() -> None:
         "click_labels":       [],
         "compare_results":    {},
         "sam_download_error": None,
-        "loaded_sam_path":    None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -197,30 +172,24 @@ def _init_state() -> None:
 _init_state()
 
 
+# Carga diferida de SAM con manejo compatible de argumentos y arquitectura
 @st.cache_resource(show_spinner=False)
-def load_sam_handler_instance(checkpoint_path: str, model_type: str):
+def get_sam_handler(checkpoint_path: str, model_type: str):
     import torch
     try:
-        torch.set_num_threads(2)
+        torch.set_num_threads(1)
     except Exception:
         pass
     from core.sam_handler import SAMHandler
     
+    # Intentar instanciar pasando model_type si el constructor lo requiere
     try:
         return SAMHandler(checkpoint_path=checkpoint_path, model_type=model_type)
     except TypeError:
-        return SAMHandler(checkpoint_path=checkpoint_path)
-
-
-def get_sam_handler(checkpoint_path: str):
-    model_type = get_model_type_from_filename(checkpoint_path)
-    
-    if st.session_state.get("loaded_sam_path") != checkpoint_path:
-        gc.collect()
-        load_sam_handler_instance.clear()
-        st.session_state["loaded_sam_path"] = checkpoint_path
-        
-    return load_sam_handler_instance(checkpoint_path, model_type)
+        try:
+            return SAMHandler(checkpoint_path=checkpoint_path, type=model_type)
+        except TypeError:
+            return SAMHandler(checkpoint_path=checkpoint_path)
 
 
 @st.cache_resource(show_spinner=False)
@@ -292,7 +261,7 @@ with st.sidebar:
     method_label = st.selectbox(
         "Método",
         options=list(METHOD_LABELS.keys()),
-        index=7,
+        index=4,
         label_visibility="collapsed",
     )
     method_key = METHOD_LABELS[method_label]
@@ -327,41 +296,33 @@ with st.sidebar:
         params["margin_frac"] = st.slider("Margen (%)", 5, 30, 10) / 100.0
 
     elif method_key == "sam_auto":
-        st.caption("Ajustes de sensibilidad de detección:")
-        params["points_per_side"] = st.slider(
-            "Puntos por lado (Grilla)", 8, 64, 16, step=8,
-            help="16 o 24 es ideal para CPU. 32 o más exige alta GPU."
-        )
-        params["pred_iou_thresh"] = st.slider(
-            "Umbral IoU mínimo", 0.50, 0.98, 0.86, step=0.01,
-            help="Disminuirlo conserva más máscaras detectadas."
-        )
-        params["stability_score_thresh"] = st.slider(
-            "Umbral de Estabilidad", 0.60, 0.99, 0.92, step=0.01,
-            help="Disminuirlo detecta objetos con bordes difusos."
-        )
-        params["min_mask_region_area"] = st.slider(
-            "Área mínima (px²)", 0, 5000, 100, step=50,
-            help="Filtra elementos más pequeños que este área."
-        )
+        params["points_per_side"] = st.slider("Puntos por lado (grilla)", 4, 16, 8)
+        params["pred_iou_thresh"] = st.slider("Umbral IoU mínimo", 0.70, 0.98, 0.88, step=0.01)
+        params["min_mask_region_area"] = st.slider("Área mínima (px²)", 100, 5000, 500, step=100)
 
     if method_key in SAM_METHODS:
-        st.markdown("🤖 **Modelo SAM**")
+        st.markdown("🤖 **Estado de SAM**")
         
-        selected_model_key = st.selectbox(
-            "Arquitectura del Modelo",
-            options=list(SAM_MODEL_CONFIGS.keys()),
-            index=0,
-        )
-
-        cfg = SAM_MODEL_CONFIGS[selected_model_key]
-        expected_path = MODELS_DIR / cfg["filename"]
-
-        if expected_path.exists() and expected_path.stat().st_size > 50_000_000:
-            mb = expected_path.stat().st_size // (1024 * 1024)
-            st.success(f"✅ Modelo listo ({mb} MB)")
+        # Buscar modelos .pth en la carpeta de modelos activa
+        available_pths = list(MODELS_DIR.glob("*.pth")) if MODELS_DIR.exists() else []
+        pth_options = [str(p) for p in available_pths]
+        
+        if pth_options:
+            sam_path = st.selectbox(
+                "Selecciona Checkpoint .pth",
+                options=pth_options,
+                index=0,
+            )
         else:
-            st.info("☁️ Se descargará automáticamente al ejecutar.")
+            sam_path = st.text_input("Ruta checkpoint .pth", value=DEFAULT_SAM_CHECKPOINT)
+
+        ckpt_exists = Path(sam_path).exists() and Path(sam_path).stat().st_size > 50_000_000
+        if ckpt_exists:
+            mb = Path(sam_path).stat().st_size // 1024 // 1024
+            mtype = get_model_type_from_filename(sam_path).upper()
+            st.success(f"✅ Modelo {mtype} detectado ({mb} MB)")
+        else:
+            st.warning("⏳ Checkpoint no encontrado. Se descargará al ejecutar SAM.")
 
     st.markdown("---")
     st.caption("ABC Geomática Agrícola SRL · 2026")
@@ -448,19 +409,16 @@ with tab_seg:
                     from utils.visualization import overlay_masks, colorize_result
 
                     if method_key in SAM_METHODS:
-                        # Forzar la recolección de basura de memoria RAM
-                        gc.collect()
-
-                        valid_ckpt_path = _ensure_sam_checkpoint_by_key(selected_model_key)
-                        handler = get_sam_handler(valid_ckpt_path)
+                        valid_ckpt_path = _ensure_sam_checkpoint(sam_path)
+                        mtype = get_model_type_from_filename(valid_ckpt_path)
+                        handler = get_sam_handler(valid_ckpt_path, mtype)
                         
                         if method_key == "sam_auto":
                             masks, err = handler.auto_segment(
                                 image_rgb,
-                                points_per_side=params.get("points_per_side", 16),
-                                pred_iou_thresh=params.get("pred_iou_thresh", 0.86),
-                                stability_score_thresh=params.get("stability_score_thresh", 0.92),
-                                min_mask_region_area=params.get("min_mask_region_area", 100),
+                                points_per_side=params.get("points_per_side", 8),
+                                pred_iou_thresh=params.get("pred_iou_thresh", 0.88),
+                                min_mask_region_area=params.get("min_mask_region_area", 500),
                             )
                         else:
                             masks, err = handler.point_segment(
@@ -539,9 +497,10 @@ with tab_compare:
                         raw = safe_run_grabcut(segmenter_c, image_rgb_c)
                         compare_store[label] = colorize_result(raw, mkey)
                     elif mkey == "sam_auto":
-                        valid_ckpt_path = _ensure_sam_checkpoint_by_key(DEFAULT_MODEL_KEY)
-                        handler_c = get_sam_handler(valid_ckpt_path)
-                        masks_c, err_c = handler_c.auto_segment(image_rgb_c, points_per_side=16)
+                        valid_ckpt_path = _ensure_sam_checkpoint(DEFAULT_SAM_CHECKPOINT)
+                        mtype = get_model_type_from_filename(valid_ckpt_path)
+                        handler_c = get_sam_handler(valid_ckpt_path, mtype)
+                        masks_c, err_c = handler_c.auto_segment(image_rgb_c, points_per_side=8)
                         if masks_c:
                             compare_store[label] = overlay_masks(image_rgb_c, masks_c)
                         else:
